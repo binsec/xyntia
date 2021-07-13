@@ -5,6 +5,8 @@
 
 Details about the paper: https://binsec.github.io/new/publication/1970/01/01/nutshell-ccs-21.html
 
+---
+
 This repository contains major datasets used to evaluate Xyntia:
 * b1 is the dataset from Blazytko et al. to evaluate Syntia; 
 * b2 is our custom dataset used to extend the evaluation of Syntia and compare it to our new AI-based blackbox deobfuscator Xyntia;
