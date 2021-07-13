@@ -1,7 +1,7 @@
 ## Xyntia Tool (CCS'21 Artefact)
-## PAPER: Search-based Local Blackbox Deobfuscation: Understand, Improve and Mitigate 
-## AUTHORS: Grégoire Menguy, Sébastien Bardin, Richard Bonichon, Cauim de Souza Lima 
-## The 28th ACM Conference on Computer and Communications Security
+#### PAPER: Search-based Local Blackbox Deobfuscation: Understand, Improve and Mitigate 
+#### AUTHORS: Grégoire Menguy, Sébastien Bardin, Richard Bonichon, Cauim de Souza Lima 
+#### The 28th ACM Conference on Computer and Communications Security
 
 Details about the paper: https://binsec.github.io/new/publication/1970/01/01/nutshell-ccs-21.html
 
