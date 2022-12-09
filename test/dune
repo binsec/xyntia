@@ -1,0 +1,3 @@
+(tests 
+    (names heuristic_test bitvector_test) 
+    (libraries utils ounit2 qcheck))

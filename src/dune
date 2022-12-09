@@ -1,0 +1,8 @@
+(executable
+	(name main)
+	(libraries unix utils))
+(install
+    (files (main.exe as xyntia))
+    (section bin)
+    (package xyntia)
+)

@@ -1,0 +1,46 @@
+{
+    "initial": {
+        "inputs": {
+            "0": {
+                "location": "DL", 
+                "size": "0x1", 
+                "value": "0x03"
+            },
+            "1": {
+                "location": "BX", 
+                "size": "0x2", 
+                "value": "0x0103"
+            }
+        }, 
+        "outputs": {
+            "0": {
+                "location": "AL", 
+                "size": "0x1", 
+                "value": "0x0106"
+            }
+        }
+    }, 
+    "sampling": {
+        "0": {
+            "inputs": {
+                "0": {
+                    "location": "DL", 
+                    "size": "0x1", 
+                    "value": "0x1a"
+                },
+                "1": {
+                    "location": "BX", 
+                    "size": "0x2", 
+                    "value": "0x1b"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "AL", 
+                    "size": "0x1", 
+                    "value": "0x35"
+                }
+            }
+        } 
+    }
+}

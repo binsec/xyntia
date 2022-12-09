@@ -1,0 +1,4 @@
+(library
+	(name lib)
+	(libraries zarith)
+	(modules_without_implementation sigs))

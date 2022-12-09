@@ -1,0 +1,4 @@
+**/.merlin
+**/*.pyc
+_build/**
+results

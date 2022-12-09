@@ -1,0 +1,180 @@
+{
+    "initial": {
+        "inputs": {
+            "0": {
+                "location": "EDI", 
+                "size": "0x4", 
+                "value": "0x2084fea3"
+            }
+        }, 
+        "outputs": {
+            "0": {
+                "location": "EAX", 
+                "size": "0x4", 
+                "value": "0x4109fd46"
+            }
+        }
+    }, 
+    "sampling": {
+        "0": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0x3463bf1a"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0x68c77e34"
+                }
+            }
+        }, 
+        "1": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0xaae46f3a"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0x55c8de74"
+                }
+            }
+        }, 
+        "2": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0x70c42f57"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0xe1885eae"
+                }
+            }
+        }, 
+        "3": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0x971b89e"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0x12e3713c"
+                }
+            }
+        }, 
+        "4": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0x50827757"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0xa104eeae"
+                }
+            }
+        }, 
+        "5": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0x1ce494be"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0x39c9297c"
+                }
+            }
+        }, 
+        "6": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0x2190bc03"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0x43217806"
+                }
+            }
+        }, 
+        "7": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0x9da642ca"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0x3b4c8594"
+                }
+            }
+        }, 
+        "8": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0xe576516c"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0xcaeca2d8"
+                }
+            }
+        }, 
+        "9": {
+            "inputs": {
+                "0": {
+                    "location": "EDI", 
+                    "size": "0x4", 
+                    "value": "0xf2c64e78"
+                }
+            }, 
+            "outputs": {
+                "0": {
+                    "location": "EAX", 
+                    "size": "0x4", 
+                    "value": "0xe58c9cf0"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,7 @@
+set confirm off
+
+source scripts/utils/traceDisassembler.py
+
+trace_disassembler
+
+quit
