@@ -10,7 +10,8 @@
     4.  [Heuristic abbreviations](#heuristic-abbreviations)
 4.  [Experiments](#experiments)
 5.  [Synthesize all blocks from a execution trace](#synthesize-all-blocks-from-a-execution-trace)
-6.  [References](#references)
+6.  [Synthesize a specific output](#synthesize-a-specific-output)
+7.  [References](#references)
 
 
 # Requirements
@@ -50,7 +51,7 @@ $ eval $(opam env)
 
 Then you can install ocaml dependencies presented previously using `opam install <package-name>`.
 
-Finally, to install xyntia, execute:
+Finally, to install Xyntia, execute:
 ```
 $ make
 $ make install
@@ -58,7 +59,7 @@ $ make install
 
 # Usage
 
-The help of xyntia is available through `xyntia -help`. In the following we will explain the two ways for using xyntia. 
+The help of Xyntia is available through `xyntia -help`. In the following we will explain the two ways for using Xyntia. 
 
 ## Synthesizing functions from fun.ml predefined functions
 
@@ -208,8 +209,8 @@ Datasets used in [1] can be found in the `./datasets` directory.
 To launch Xyntia over a dataset (e.g., B2) with a given timeout (e.g., 1s) execute the following commands:
 
 ```
-$ ./scripts/bench/sample.py --bench ./datasets/b2 --out <resdir>
-$ ./scripts/bench/bench.py --bench ./datasets/b2 --timeout 1 --out <resdir>
+$ python3 ./scripts/bench/sample.py --bench ./datasets/b2 --out <resdir>
+$ python3 ./scripts/bench/bench.py --bench ./datasets/b2 --timeout 1 --out <resdir>
 ```
 
 The option and their meanings can be found through the `--help` option.
@@ -229,6 +230,24 @@ Here is an example:
 ```
 $ cd examples/bin && make && cd -
 $ ./scripts/utils/all_from_trace.sh --outdir <resdir> --all -- ./examples/bin/add
+```
+
+# Synthesize a specific output
+
+The previous section explained how to synthesize each output of each basic block. However, you may be interested in only one output of one basic block.
+We explain how to do it for the `add` function of `./examples/bin/add` and the `eax` output.
+
+First, you need to trace the code:
+```
+$ ./scripts/utils/all_from_trace.sh --outdir <resdir> --gdb -- ./examples/bin/add
+```
+
+Then you need to find the basic block of interest in `<resdir>/add/cfgs`. In our case, this is the file `<resdir>/add/cfgs/0x56556191.bin`. 
+Now you can sample the `eax` output and run Xyntia over it:
+
+```
+$ python3 ./scripts/utils/binsec/sample.py --bin <resdir>/add/cfgs/0x56556191.bin --reg_out eax --out 0x56556191_eax
+$ xyntia 0x56556191_eax/out_0.json
 ```
 
 # References

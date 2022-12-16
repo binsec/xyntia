@@ -110,7 +110,8 @@ class MemoryWrite:
 
     def remove(self, memorywrite):
         for st in memorywrite.stores:
-            self.stores.remove(st)
+            if st in self.stores:
+                self.stores.remove(st)
 
     def getBaseName(self):
         return "memwrite_{}".format(self.index)
@@ -378,12 +379,14 @@ def random_sample(solv, index_sample, inputs, outputs):
     return res
 
         
-def main(binary, nsamples, outdir, bits=32):
+def main(binary, nsamples, reg_out, outdir, bits=32):
     formula = extract_smt_formula(binary)
     solv = Solver(formula, bits)
     
     inputs = solv.get_register_reads() + solv.get_memory_reads()
     outputs = solv.get_register_writes() + solv.get_memory_writes()
+    if reg_out != None:
+        outputs = [ o for o in outputs if reg_out in o.getName() ]
 
     res = { 
         output: {
@@ -414,6 +417,7 @@ if __name__ == "__main__":
     parser.add_argument('--bin', required=True, type=str, help="binary to load")
     parser.add_argument('--arch', required=False, type=str, help="architecture: x86, x64 (default: x86)")
     parser.add_argument('--nsamples', required=False, type=int, help="number of samples (default = 100)")
+    parser.add_argument('--reg_out', required=False, type=str, help="output register to sample (if not set, samples all outputs)")
     parser.add_argument('--out', required=True, type=str, help="output directory")
     args = parser.parse_args()
 
@@ -426,4 +430,4 @@ if __name__ == "__main__":
     ARCH = args.arch if args.arch != None else "x86"
     nsamples = args.nsamples if args.nsamples != None else 100
 
-    main(args.bin, nsamples, args.out)
+    main(args.bin, nsamples, args.reg_out, args.out)
