@@ -19,23 +19,30 @@
 (*                                                                        *)
 (**************************************************************************)
 
-type summary = {
-    success : bool ;
-    expression : string ;
-    simplified : string ;
-    smtlib : string ;
-    size : int;
-    time_synthesis : float;
-    time_simplify : float;
-}
+let fold2 ~f ~init arr1 arr2 =
+  let rec loop acc i =
+    match i with
+    | 0 -> f acc arr1.(i) arr2.(i)
+    | _ -> loop (f acc arr1.(i) arr2.(i)) (i - 1)
+  in
+  if Array.length arr1 <> Array.length arr2 then
+    invalid_arg "Array don't have the same size"
+  else loop init (Array.length arr1 - 1)
 
-module type S = sig
-    val search : int -> summary
-end
+let map3 f x y z =
+  let lx = Array.length x in
+  let ly = Array.length y in
+  let lz = Array.length z in
+  if lx <> ly || lx <> lz then assert false
+  else
+    Array.init lx (fun i -> f (Array.get x i) (Array.get y i) (Array.get z i))
 
-module Mk_iterated_local_search (D: Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* ils *)
-module Mk_random_walk           (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* rw  *)
-module Mk_hill_climbing         (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* hc  *)
-module Mk_simulated_annealing   (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* sa  *)
-
-val of_string : (module Distance.VECDIST) -> (module Oracle.ORACLE) -> (module Tree.MUTATOR) -> string -> (module S)
+let min_list f l =
+  let foldf acc y =
+    match acc with
+    | None -> Some (y, f y)
+    | Some (x, vx) ->
+        let vy = f y in
+        if vx <= vy then Some (x, vx) else Some (y, vy)
+  in
+  List.fold_left foldf None l

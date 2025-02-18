@@ -1,7 +1,7 @@
 ##########################################################################
 #  This file is part of BINSEC.                                          #
 #                                                                        #
-#  Copyright (C) 2019-2022                                               #
+#  Copyright (C) 2019-2025                                               #
 #    CEA (Commissariat à l'énergie atomique et aux énergies              #
 #         alternatives)                                                  #
 #                                                                        #
@@ -21,11 +21,13 @@
 
 .PHONY: test
 
-all: test
-	@dune build @install 
+all: build test
 
 test:
 	@dune runtest
+
+build:
+	@dune build @install
 
 install:
 	dune install

@@ -1,0 +1,19 @@
+(library
+ (public_name xyntiasampler)
+ (name xyntiasampler)
+ (modules modeleval termsampler)
+ (flags
+  (:standard -open Binsec -open Smt -open Libsse -open Libterm -open Yojson -w "-58"))
+ (libraries binsec.smt binsec.sse binsec.sse.term yojson))
+
+(plugin
+ (package xyntiasampler)
+ (name xyntiasampler)
+ (libraries xyntiasampler)
+ (site (binsec plugins)))
+
+(plugin
+ (package xyntiasampler)
+ (name sampling)
+ (libraries xyntiasampler)
+ (site (binsec plugins)))

@@ -19,23 +19,7 @@
 (*                                                                        *)
 (**************************************************************************)
 
-type summary = {
-    success : bool ;
-    expression : string ;
-    simplified : string ;
-    smtlib : string ;
-    size : int;
-    time_synthesis : float;
-    time_simplify : float;
-}
+exception Halt
+exception CEGISHalt
 
-module type S = sig
-    val search : int -> summary
-end
-
-module Mk_iterated_local_search (D: Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* ils *)
-module Mk_random_walk           (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* rw  *)
-module Mk_hill_climbing         (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* hc  *)
-module Mk_simulated_annealing   (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* sa  *)
-
-val of_string : (module Distance.VECDIST) -> (module Oracle.ORACLE) -> (module Tree.MUTATOR) -> string -> (module S)
+exception SynthesisNotStarted

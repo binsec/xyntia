@@ -1,7 +1,7 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2022                                               *)
+(*  Copyright (C) 2019-2025                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
@@ -19,4 +19,10 @@
 (*                                                                        *)
 (**************************************************************************)
 
-val mk_confs : binfile:string -> output:Oracle.variable -> expr:string -> string
+val sample : string -> string -> string option -> string option -> unit
+
+val get_formula : unit -> string
+
+val get_samples : unit -> string list
+
+val remove_samples : unit -> unit

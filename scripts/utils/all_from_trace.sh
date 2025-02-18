@@ -2,7 +2,7 @@
 ##########################################################################
 #  This file is part of BINSEC.                                          #
 #                                                                        #
-#  Copyright (C) 2019-2022                                               #
+#  Copyright (C) 2019-2025                                               #
 #    CEA (Commissariat à l'énergie atomique et aux énergies              #
 #         alternatives)                                                  #
 #                                                                        #
@@ -31,26 +31,29 @@ PYTHON=python3
 
 bin=""
 args=""
-timeout=60
 
 all=false
 sample=false
 synthesis=false
-check=false
 gdb=false
+ghidra=false
 outdir=""
+ARCH="x86"
 
 manual="""\
-usage: $0 --outdir <path> [--all] [--gdb] [--sample] [--learn] [--check] [--timeout] [--extractor] -- binary arg1 arg2 ...
+usage: $0 --outdir <path> [--all] [--gdb] [--sample] [--learn] -- binary arg1 arg2 ...
+
+ENVIRONEMENT VARIABLES:
+    XYNTIA                              : the xyntia command to run
 
 arguments:
     -o / --outdir <path>                : path to store results
-    -a / --all                          : extract traces/cfg, sample and synthesize (equivalent to -g -s -l -c) 
+    -a / --all                          : extract traces/cfg, sample and synthesize (equivalent to -gh -s -l -c) 
     -g / --gdb                          : extract traces using GDB
+    -gh / --ghidra                      : extract blocks using ghidra (no need to give binary argument)
     -s / --sample                       : sample blocks of code
     -l / --learn                        : synthesize blocks of code
-    -c / --check                        : check equivalence between sythesized and extracted formula
-    -t / --timeout                      : synthesis timeout
+    -ar / --arch                        : the architecture to use among x86, amd64 (default x86)
 """
 
 POSITIONAL=()
@@ -62,8 +65,12 @@ while [[ $# -gt 0 ]];do
         all=true
         shift # past argument
         ;;
-        -g|--gdb) # Exrtact blocks using GDB (Default)
+        -g|--gdb) # Exrtact blocks using GDB
         gdb=true
+        shift # past argument
+        ;;
+        -gh|--ghidra) # Extract blocks using Ghidra (default)
+        ghidra=true
         shift # past argument
         ;;
         -s|--sample)
@@ -74,17 +81,13 @@ while [[ $# -gt 0 ]];do
         synthesis=true
         shift # past argument
         ;;
-        -c|--check)
-        check=true
-        shift # past argument
-        ;;
-        -t|--timeout)
-        timeout="$2"
+        -o|--outdir)
+        outdir="$2"
         shift # past argument
         shift # past value
         ;;
-        -o|--outdir)
-        outdir="$2"
+        -ar|--arch)
+        ARCH="$2"
         shift # past argument
         shift # past value
         ;;
@@ -107,34 +110,43 @@ while [[ $# -gt 0 ]];do
 done
 set -- "${POSITIONAL[@]}" # restore positional parameters
 
+if [[ "$XYNTIA" = "" ]];then
+    echo -e "${RED}[arg error] the XYNTIA variable must be set${NC}"
+    exit 1
+fi
+
 if [[ "$outdir" = "" ]];then
-    echo -e "${red}[arg error] option -o/--outdir must be set${nc}"
+    echo -e "${RED}[arg error] option -o/--outdir must be set${NC}"
     echo -e "$manual"
     exit 1
 fi
 
 if [[ "$bin" = "" ]];then
-    echo -e "${red}[arg error] no path to binary given${nc}"
+    echo -e "${RED}[arg error] no path to binary given${NC}"
     echo -e "$manual"
     exit 1
 fi
 
 if $all;then
     # If $all set to true, then set all other options to true
-    gdb=true
+    ghidra=true
     sample=true
     synthesis=true
-    check=true
 fi
 
 cfgdir="$outdir/$(basename $bin)/cfgs"
 samplesdir="$outdir/$(basename $bin)/samples"
+resdir="$outdir/$(basename $bin)/synthesized"
 
-if [ ! -d "./$outdir/$(basename $bin)" ];then
-    mkdir -p "./$outdir/$(basename $bin)"
+
+echo -e "$GREEN[CONFIG] Xyntia command: $XYNTIA$NC"
+echo -e "$GREEN[CONFIG] Binary to analyze: $bin $args$NC"
+
+if [ ! -d "$outdir/$(basename $bin)" ];then
+    mkdir -p "$outdir/$(basename $bin)"
 fi
 
-if $gdb;then
+if $gdb || $ghidra;then
     echo -e "$GREEN[CONFIG] Save CFGs to \"$cfgdir\"$NC"
 fi
 if $sample;then
@@ -144,28 +156,49 @@ if $synthesis;then
     echo -e "$GREEN[CONFIG] Save synthesis results to \"$outdir/$(basename $bin)/synthesized\"$NC"
 fi
 
-if $gdb;then
+if $gdb || $ghidra;then
     # Extract blocks of code from execution trace
     echo -e "$GREEN[INFO] Extrat CFG graph ($bin $args) to ${cfgdir}${NC}"
-
     mkdir $cfgdir
-    echo -e "$GREEN[INFO] Run GDB to extract CFG${NC}"
-    gdb -batch-silent -ex "py args = \"$args\"; outdir = \"$cfgdir\"" -x scripts/utils/gdbscript.txt $bin
+    if $gdb; then
+        echo -e "$GREEN[INFO] Run GDB to extract CFG${NC}"
+        gdb -batch-silent -ex "py args = \"$args\"; outdir = \"$cfgdir\"" -x scripts/utils/gdbscript.txt $bin
+    else
+        echo -e "$GREEN[INFO] Run Ghidra to extract CFG${NC}"
+        tmpfile=/tmp/$(basename $bin)_$(cat /dev/urandom | tr -dc '[:alpha:]' | fold -w ${1:-20} | head -n 1).$(date +"%H-%M-%S-%N")
+        mkdir $tmpfile
+        ${GHIDRA}/support/analyzeHeadless $tmpfile empty -import $bin -postscript scripts/utils/ghidra/DumpBlocks.py $cfgdir 1> /dev/null
+        rm -rf $tmpfile
+    fi
+
 fi
 
 if $sample;then
     # Sample each block of code
     echo -e "$GREEN\n[INFO] Sample each block$NC"
-    ./scripts/utils/sample.sh $bin $outdir
+    mkdir $samplesdir
+    for block in $(ls $cfgdir/*.bin);do
+        echo $block
+        blockfile=$(basename $block)
+        addr=${blockfile%.*}
+        $PYTHON ./scripts/utils/sample.py --bin $block --arch $ARCH --out $samplesdir/$addr
+    done
 fi
 
 if $synthesis;then
     # Synthesize each block of code
     echo -e "$GREEN\n[INFO] Synthesize each block$NC"
-    ./scripts/utils/synthesize_cfg.sh "$bin" "$timeout" "$outdir"
+    mkdir $resdir
+    for samples in $(ls $samplesdir);do
+        echo $samplesdir/$samples
+        mkdir $resdir/$samples
+        for sample in $(ls $samplesdir/$samples/*.json);do
+            bname=$(basename $sample)
+	    dirname=$(dirname $sample)
+            $XYNTIA -json $sample -formula $dirname/formula > $resdir/$samples/$bname
+        done
+    done
 fi
 
-if $check;then
-    echo -e "$GREEN\n[INFO] Check equivalence$NC"
-    $PYTHON ./scripts/utils/binsec/check_equiv.py --dir "$outdir/$(basename $bin)"
-fi
+echo -e "$GREEN\n[INFO] Compute statistics$NC"
+$PYTHON ./scripts/utils/get_stats.py --resdir $resdir --sampdir $samplesdir

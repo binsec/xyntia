@@ -4,13 +4,12 @@
 1.  [Requirements](#requirements)
 2.  [Installation](#installation)
 3.  [Usage](#usage)
-    1.  [Synthesizing functions from fun.ml predefined functions](#synthesizing-functions-from-funml-predefined-functions)
-    2.  [Synthesizing functions from sampling files](#synthesizing-functions-from-sampling-files)
+    1.  [Synthesizing functions from sampling files](#synthesizing-functions-from-sampling-files)
+    2.  [Synthesizing functions from a binary](#synthesizing-functions-from-a-binary)
     3.  [Grammar abbreviations](#grammar-abbreviations)
     4.  [Heuristic abbreviations](#heuristic-abbreviations)
 4.  [Experiments](#experiments)
 5.  [Synthesize all blocks from a execution trace](#synthesize-all-blocks-from-a-execution-trace)
-6.  [Synthesize a specific output](#synthesize-a-specific-output)
 7.  [References](#references)
 
 
@@ -20,58 +19,27 @@
 
 On debian like systems, run the following command: 
 ```
-sudo apt install libgmp3-dev gcc-multilib gdb python3 python3-pip python3-tqdm z3
+sudo apt install libgmp3-dev gcc-multilib gdb python3 python3-pip python3-venv openjdk-17-jdk libgmp-dev pkg-config opam
 ```
 
-## OCaml requirements
+You must also install [Ghidra](https://ghidra-sre.org/) and add the GHIDRA environment variable with the installation directory of ghidra 
+```bash
+export GHIDRA=<ghidra-directory>
+```
 
--   [OCaml](https://ocaml.org/docs/install.fr.html) (>= 4.09)
--   [Dune](https://github.com/ocaml/dune) (>= 1.11.4)
--   [Zarith](https://github.com/ocaml/Zarith)
--   [Yojson](https://github.com/ocaml-community/yojson) (>= 1.7.0)
--   [Qcheck](https://github.com/c-cube/qcheck/) (>= 0.20)
-
-You can install all the packages above with [opam](https://opam.ocaml.org/).
-
-## Symbolic execution engine
-
-Xyntia is a standalone tool which takes I/O example as input and synthesize a corresponding expression. 
-Still, in practice, you do not want to give these I/O examples by hand. 
-Thus we give scripts to automatically sample them from a given binary. 
-It relies on the Binsec symbolic execution engine:
--   [Binsec](https://binsec.github.io/) (version >= 0.6.3)
 
 # Installation
 
-First, if you do not have a opam switch for an ocaml version >= 4.09 do:
+The easiest way to install xyntia is to create an opam switch. It will automatically install xyntia and its dependencies:
 ```
-$ opam switch create . 4.09 # or any version >= 4.09
+$ cd <xyntia-directory>
+$ opam switch create . 4.14.1 -y # or any version >= 4.14.1
 $ eval $(opam env)
-```
-
-Then you can install ocaml dependencies presented previously using `opam install <package-name>`.
-
-Finally, to install Xyntia, execute:
-```
-$ make
-$ make install
 ```
 
 # Usage
 
-The help of Xyntia is available through `xyntia -help`. In the following we will explain the two ways for using Xyntia. 
-
-## Synthesizing functions from fun.ml predefined functions
-
-The module Fun from src/fun.ml contains a list of sample functions that can be used to test Xyntia without the need of processing a sampling file.
-To run Xyntia on one of the functions in Fun, run the following command:
-
-```
-$ xyntia [-ops <grammar>] [-time <time>] [-heur <heur>] -nosamp <id> <nargs>
-```
-
-where *grammar* is the abbreviation of the grammar used to define the search space (see below), *time* is the time budget of the synthesis in seconds, *heur* is the abbreviation for the search heuristic to be used (see below), *id* is the index of the function in the list, and *nargs* is the number of arguments that the function takes as input.
-
+The help of xyntia is available through `xyntia -help`. In the following we will explain the two ways for using xyntia. 
 
 ## Synthesizing functions from sampling files
 
@@ -84,6 +52,34 @@ where *grammar* is the abbreviation of the grammar used to define the search spa
 
 The sampling file should be in the format produced by Syntia's random sampling module. The file `examples/samples/example.json` is an example of a sampling file.
 
+## Synthesizing functions from a binary
+
+You can let xyntia sample the output from a binary and synthesize them with the 
+following command:
+```
+$ xyntia [-ops <grammar>] [-time <time>] [-heur <heur>] -bin <binary-file> -config <config-file> 
+```
+where *binary-file* is the path to the binary to analyze and *config-file* is a configuration file to state which output to sample 
+and how to sample (cf. [config documentation](sampler/README.md)).
+
+
+For example to synthesize the `eax` output of the add function, run
+```
+$ cd examples/bin && make && cd -
+$ cat examples/bin/add.ini
+starting from <add>
+
+set sample output stdout
+
+explore all
+
+hook <add:last> with 
+    sample 100 eax
+    halt
+end
+
+$ xyntia -bin examples/bin/add -config examples/bin/add.ini
+```
 
 ## Grammar abbreviations
 
@@ -209,8 +205,7 @@ Datasets used in [1] can be found in the `./datasets` directory.
 To launch Xyntia over a dataset (e.g., B2) with a given timeout (e.g., 1s) execute the following commands:
 
 ```
-$ python3 ./scripts/bench/sample.py --bench ./datasets/b2 --out <resdir>
-$ python3 ./scripts/bench/bench.py --bench ./datasets/b2 --timeout 1 --out <resdir>
+$ python3 ./scripts/bench/bench.py --dataset datasets/b2 --out results --parallel -- xyntia -check -time 1
 ```
 
 The option and their meanings can be found through the `--help` option.
@@ -218,10 +213,11 @@ The option and their meanings can be found through the `--help` option.
 
 # Synthesize all blocks from a execution trace
 
-We also give `./scripts/utils/all_from_trace.sh` which traces code execution with GDB, extracts each code block executed, samples and synthesizes them.
+We also give `./scripts/utils/all_from_trace.sh` which traces code execution with Ghidra or GDB, extracts each code block executed, samples and synthesizes them.
 The manual is available through `./scripts/utils/all_from_trace.sh --help` and it can be run as follows: 
 
 ```
+$ XYNTIA="xyntia <options>" # the xyntia command to use
 $ ./scripts/utils/all_from_trace.sh --outdir <resdir> --all -- binary arg1 arg2 ...
 ```
 
@@ -230,24 +226,6 @@ Here is an example:
 ```
 $ cd examples/bin && make && cd -
 $ ./scripts/utils/all_from_trace.sh --outdir <resdir> --all -- ./examples/bin/add
-```
-
-# Synthesize a specific output
-
-The previous section explained how to synthesize each output of each basic block. However, you may be interested in only one output of one basic block.
-We explain how to do it for the `add` function of `./examples/bin/add` and the `eax` output.
-
-First, you need to trace the code:
-```
-$ ./scripts/utils/all_from_trace.sh --outdir <resdir> --gdb -- ./examples/bin/add
-```
-
-Then you need to find the basic block of interest in `<resdir>/add/cfgs`. In our case, this is the file `<resdir>/add/cfgs/0x56556191.bin`. 
-Now you can sample the `eax` output and run Xyntia over it:
-
-```
-$ python3 ./scripts/utils/binsec/sample.py --bin <resdir>/add/cfgs/0x56556191.bin --reg_out eax --out 0x56556191_eax
-$ xyntia 0x56556191_eax/out_0.json
 ```
 
 # References

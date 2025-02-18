@@ -1,7 +1,7 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2022                                               *)
+(*  Copyright (C) 2019-2025                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
@@ -19,35 +19,21 @@
 (*                                                                        *)
 (**************************************************************************)
 
-open Printf
+type equiv_answer = YES | NO | UKN
 
-let kernel_section = [
-    ("isa", "x86") ;
-]
+type counter_example = { 
+  inputs : (Oracle.variable * Bitvector.t) array;
+  output : (Oracle.variable * Bitvector.t)  
+}
 
-let mk_header = sprintf "[%s]"
+module type CheckerType = sig
+    val open_session : unit -> unit
+    val close_session : unit -> unit
+    val check : string -> string -> equiv_answer
+    val get_counter_example : unit -> counter_example
+  end
 
-let mk_section hdr_name =
-    List.fold_left
-    (fun acc (key, vl) -> sprintf "%s\n%s = %s" acc key vl)
-    (mk_header hdr_name)
+module EquivChecker (O: Oracle.ORACLE) (Solver: Smt.Smt_sig.Solver) : CheckerType 
 
-let mk_xyntia_sec binfile (output : Oracle.variable) expr =
-    let return_val =
-        sprintf "%s<%d>" output.name output.sz
-    in
-    mk_section "xyntia"
-    [
-        ("bin", binfile)       ;
-        ("return", return_val) ;
-        ("challenger", expr)   ;
-    ]
-
-let mk_confs ~binfile ~output ~expr =
-    let xyntia_section =
-        mk_xyntia_sec binfile output expr
-    in
-    String.concat "\n\n" [
-        mk_section "kernel"
-            kernel_section; xyntia_section
-    ]
+val answer_to_string : equiv_answer -> string
+val make_checker : (module Oracle.ORACLE) -> string option -> int option -> (module CheckerType)

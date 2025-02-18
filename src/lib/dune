@@ -1,3 +1,5 @@
 (library
-	(name utils)
-	(libraries yojson bitvector))
+        (package xyntia)
+	(name xyntia_utils)
+	(libraries yojson binsec binsec.smt binsec.sse xyntiasampler fileutils)
+)

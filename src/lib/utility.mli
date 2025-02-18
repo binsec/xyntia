@@ -1,7 +1,7 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2022                                               *)
+(*  Copyright (C) 2019-2025                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
@@ -19,6 +19,11 @@
 (*                                                                        *)
 (**************************************************************************)
 
-include Big_int_Z
+val fold2 :
+  f:('acc -> 'b -> 'c -> 'acc) -> init:'acc -> 'b array -> 'c array -> 'acc
 
-type t = big_int
+val map3 :
+  ('a -> 'b -> 'c -> 'd) -> 'a array -> 'b array -> 'c array -> 'd array
+
+(* Computes the minimum element of the list, returning the Some (element, cost) if it exists and None else *)
+val min_list : ('a -> 'b) -> 'a list -> ('a * 'b) option
