@@ -1,7 +1,7 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2022                                               *)
+(*  Copyright (C) 2019-2025                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
@@ -25,52 +25,53 @@ type summary = {
     expression : string ;
     simplified : string ;
     smtlib : string ;
+    size : int;
     time_synthesis : float ;
     time_simplify : float;
   }
 
-module type Dist = sig
-  val dist : Bitvector.t -> Bitvector.t -> float
-  val is_zero : float -> bool
-end
+module type DIST = Distance.DIST
+module type VECDIST = Distance.VECDIST
 
 module type S = sig
   val search : int -> summary
 end
 
+
+exception Halt = Exceptions.Halt
+exception CEGISHalt = Exceptions.CEGISHalt
+exception SynthesisNotStarted = Exceptions.SynthesisNotStarted
+
 type solution = { tree : Tree.t ; cost : float }
 
-type sum_array = { mutable sum : float }
-
-exception Halt
-
-let no_time_message = "Not enough time to start synthesis"
-
-(** Computes (dist ar.(0) ar'.(0)) + ... + (dist ar.(n) ar'.(n))**)
-let sum_dists dist ar ar' =
-    let acc = { sum = 0. } in
-    Array.iter2 (fun x y -> acc.sum <- acc.sum +. dist x y) ar ar';
-    acc.sum
+(*let print_float_array arr =
+    let s = Array.fold_left (fun acc elem -> acc ^ (string_of_float elem)) "" arr in
+    print_endline s*)
 
 (** Module for the Iterated Local Search S-metaheuristic **)
-module Mk_iterated_local_search (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S = struct
-    module M = Tree.Mk_Mutator (O) (MU)
+module Mk_iterated_local_search (D : VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S = struct
 
     let is_stuck n = n > 100 (** number of mutations where no improvement is observed before doing a perturbation **)
+
+    let dist = D.vecdist
+
+    let terminated sol =
+        D.is_zero sol.cost
 
     (** Compute the cost of an AST i.e. 
       * the distance between its outputs 
       * and the observed ones **)
     let cost tree = 
-        let actual_outs = M.eval tree in
-        let exp_outs = O.out_values () in
-        sum_dists D.dist actual_outs exp_outs
+        let actual = M.eval tree in
+        let expected = O.out_values () in
+        dist actual expected
 
     let gen_sol tree = { tree ; cost = cost tree } (** a solution is a tree (i.e. an AST) with its cost **)
 
     (** Implementation of the Iterated Local Search algorithm **)
     let search maxdepth =
-        let time_base = Sys.time() in (* Initialize time_base to enforce timeout *)
+        (* Initialize time_base to enforce timeout *)
+        let time_base = Sys.time() in 
         try
 
             (* Perturbation step *)
@@ -89,25 +90,34 @@ module Mk_iterated_local_search (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATI
              * depth : states how many perturbations have been done (use to reset the possible mutation choices) *)
             let rec loop sol n depth =
                 (* Iterative mutations of the AST *)
-                if is_stuck n || D.is_zero sol.cost then sol
+                if is_stuck n || terminated sol then sol
                 else
                     let mutated = M.mutate maxdepth sol.tree (Some depth) in
                     let sol' = gen_sol mutated in
-                    if sol'.cost < sol.cost then loop sol' 0 depth
+                    if terminated sol' then sol'
+                    else if sol'.cost < sol.cost then loop sol' 0 depth
                     else loop sol (n + 1) depth 
             in
-
-            Random.self_init ();
             let best_sol = ref (gen_sol (M.singleton ())) in (* Initial state: an AST of size 1 i.e. a constant or a variable *)
             let depth = ref 0 in (* keep track on the number of perturbation *)
             try
-                while not (D.is_zero !best_sol.cost) do
+                while not (terminated !best_sol) do
                     (* Iterate until the distance equals 0 or timeout *)
                     let perturbated_sol = gen_sol (perturbate !best_sol) in
                     let sol' = loop perturbated_sol 0 !depth in
                     depth := !depth + 1;
-                    best_sol := if sol'.cost < !best_sol.cost then sol' else !best_sol
+                    best_sol := if (terminated sol') || (sol'.cost < !best_sol.cost) then sol' else !best_sol
                 done;
+
+
+                let actual = M.eval !best_sol.tree in
+                let expected = O.out_values () in
+                (* Convert the resulting solution if we activated top-level constant analysis *)
+                best_sol := gen_sol (D.extract !best_sol.tree actual expected);
+
+                if (not (D.is_zero !best_sol.cost)) then
+                    failwith (Printf.sprintf "pattern does not zeroify %s\n" (M.to_string !best_sol.tree));
+                    
 
                 let time_synth = Sys.time() in  
                 let simpl = M.simplify !best_sol.tree in (* Postprocess to clean the synthesized expression *)
@@ -127,10 +137,11 @@ module Mk_iterated_local_search (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATI
                     expression = M.to_string !best_sol.tree; 
                     simplified = M.to_string simpl;
                     smtlib = M.to_smtlib simpl;
+                    size = M.get_expr_size simpl;
                     time_synthesis = time_synth -. time_base; 
                     time_simplify = time_simpl -. time_synth;
                 }
-            with Halt ->
+            with Halt | CEGISHalt ->
                 let time_synth = Sys.time() in  
                 let simpl = (M.simplify !best_sol.tree) in
                 let time_simpl = Sys.time() in  
@@ -140,16 +151,18 @@ module Mk_iterated_local_search (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATI
                     expression = M.to_string !best_sol.tree;
                     simplified = M.to_string simpl;
                     smtlib = M.to_smtlib simpl;
+                    size = M.get_expr_size simpl;
                     time_synthesis = time_synth -. time_base; 
                     time_simplify = time_simpl -. time_synth;
                 }
 
-        with Halt -> failwith no_time_message
+        with Halt | CEGISHalt -> raise SynthesisNotStarted
 end
 
 (** Module for the Random Walk S-metaheuristic **)
-module Mk_random_walk (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S = struct
-    module M = Tree.Mk_Mutator (O) (MU)
+module Mk_random_walk (D : VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S = struct
+
+    let dist = D.vecdist
 
     (** Compute the cost of an AST i.e. 
       * the distance between its outputs 
@@ -157,15 +170,13 @@ module Mk_random_walk (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S =
     let cost tree =
         let actual_outs = M.eval tree in
         let exp_outs = O.out_values () in
-        sum_dists D.dist actual_outs exp_outs
+        dist actual_outs exp_outs
 
     let gen_sol tree = { tree ; cost = cost tree }
 
     (** Implementation of the Random Walk algorithm **)
     let search maxdepth =
         try
-            Random.self_init ();
-
             let depth = ref 0 in
 
             let best_sol = ref (gen_sol (M.singleton ())) in (* Initial state: an AST of size 1 i.e. a constant or a variable *)
@@ -187,6 +198,7 @@ module Mk_random_walk (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S =
                     expression = M.to_string !best_sol.tree;
                     simplified = M.to_string simpl;
                     smtlib = M.to_smtlib simpl;
+                    size = M.get_expr_size simpl;
                     time_synthesis = 0.0;
                     time_simplify = 0.0;
                 }
@@ -198,18 +210,19 @@ module Mk_random_walk (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S =
                     expression = M.to_string !best_sol.tree;
                     simplified = M.to_string simpl;
                     smtlib = M.to_smtlib simpl;
+                    size = M.get_expr_size simpl;
                     time_synthesis = 0.0;
                     time_simplify = 0.0;
                 }
 
-        with Halt -> failwith no_time_message
+        with Halt -> raise SynthesisNotStarted
 end
 
 (** Module for the Hill Climbing S-metaheuristics **)
-module Mk_hill_climbing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S = struct
-    module M = Tree.Mk_Mutator (O) (MU)
-
+module Mk_hill_climbing (D : VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S = struct
     let is_stuck n = n > 100
+
+    let dist = D.vecdist
 
     (** Compute the cost of an AST i.e. 
       * the distance between its outputs 
@@ -217,14 +230,13 @@ module Mk_hill_climbing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S
     let cost tree =
         let actual_outs = M.eval tree in
         let exp_outs = O.out_values () in
-        sum_dists D.dist actual_outs exp_outs
+        dist actual_outs exp_outs
 
     let gen_sol tree = { tree ; cost = cost tree }
 
     (** Implementation of the Hill Climbing algorithm **)
     let search maxdepth =
         try
-            Random.self_init ();
             let best_sol =
                 ref (gen_sol (M.singleton ())) (* Initial state: an AST of size 1 i.e. a constant or a variable *)
             in
@@ -248,6 +260,7 @@ module Mk_hill_climbing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S
                     expression = M.to_string !best_sol.tree;
                     simplified = M.to_string simpl;
                     smtlib = M.to_smtlib simpl;
+                    size = M.get_expr_size simpl;
                     time_synthesis = 0.0;
                     time_simplify = 0.0;
                 }
@@ -260,15 +273,17 @@ module Mk_hill_climbing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S
                     simplified = M.to_string simpl;
                     smtlib = M.to_smtlib simpl;
                     time_synthesis = 0.0;
+                    size = M.get_expr_size simpl;
                     time_simplify = 0.0;
                 }
 
-        with Halt -> failwith no_time_message
+        with Halt -> raise SynthesisNotStarted
 end
 
 (** Module for the Simulated Annealing S-metaheuristic **)
-module Mk_simulated_annealing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S = struct
-    module M = Tree.Mk_Mutator (O) (MU)
+module Mk_simulated_annealing (D : VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S = struct
+
+    let dist = D.vecdist
 
     (** Compute the cost of an AST i.e. 
       * the distance between its outputs 
@@ -276,7 +291,7 @@ module Mk_simulated_annealing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATION
     let cost tree =
         let actual_outs = M.eval tree in
         let exp_outs = O.out_values () in
-        sum_dists D.dist actual_outs exp_outs
+        dist actual_outs exp_outs
 
     let gen_sol tree = { tree ; cost = cost tree }
 
@@ -311,7 +326,6 @@ module Mk_simulated_annealing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATION
     (** Implementation of the Simulated annealing algorithm **)
     let search maxdepth =
         try
-            Random.self_init ();
             let t0 = initial_temp maxdepth () in
             let t_lim = t0 /. 1000. in
 
@@ -355,6 +369,7 @@ module Mk_simulated_annealing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATION
                     expression = M.to_string !best_sol.tree;
                     simplified = M.to_string simpl;
                     smtlib = M.to_smtlib simpl;
+                    size = M.get_expr_size simpl;
                     time_synthesis = 0.0;
                     time_simplify = 0.0;
                 }
@@ -366,17 +381,19 @@ module Mk_simulated_annealing (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATION
                     expression = M.to_string !best_sol.tree;
                     simplified = M.to_string simpl;
                     smtlib = M.to_smtlib simpl;
+                    size = M.get_expr_size simpl;
                     time_synthesis = 0.0;
                     time_simplify = 0.0;
                 }
 
-        with Halt -> failwith no_time_message
+        with Halt -> raise SynthesisNotStarted
 end
 
 
 (** Module for the Metropolis Hasting S-metaheuristic **)
-module Mk_metropolis_hastings (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATIONS) : S = struct
-    module M = Tree.Mk_Mutator (O) (MU)
+module Mk_metropolis_hastings (D : VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S = struct
+
+    let dist = D.vecdist
 
     (** Compute the cost of an AST i.e. 
       * the distance between its outputs 
@@ -384,7 +401,7 @@ module Mk_metropolis_hastings (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATION
     let cost tree =
         let actual_outs = M.eval tree in
         let exp_outs = O.out_values () in
-        sum_dists D.dist actual_outs exp_outs
+        dist actual_outs exp_outs
 
     let gen_sol tree = { tree ; cost = cost tree }
 
@@ -418,13 +435,13 @@ module Mk_metropolis_hastings (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATION
     (** Implementation of the Metropolis Hasting algorithm **)
     let search maxdepth =
         try
-            Random.self_init ();
             let t0 = initial_temp maxdepth () in
             let t_lim = t0 /. 1000. in
             (* batch size should be proportional to the neighborhood size,
                 which in our case is proportional to the number of nodes in
                 the tree *)
             let batch_size = factor * (1 lsl maxdepth) in
+            (* @TODO (NB): Could be transformed into immutable solutions (I think) *)
             let best_sol = ref (gen_sol (M.singleton ())) in (* Initial state: an AST of size 1 i.e. a constant or a variable *)
             let rec loop temp sol count =
                 if D.is_zero !best_sol.cost then
@@ -449,200 +466,30 @@ module Mk_metropolis_hastings (D : Dist) (O : Oracle.ORACLE) (MU : Tree.MUTATION
                     else
                         batch_loop temp sol count (n + 1)
             in
-
-            try
-                loop t0 !best_sol 1;
-                let simpl = M.simplify !best_sol.tree in
-                { 
-                    (* Return the solution *)
-                    success = D.is_zero !best_sol.cost ;
-                    expression = M.to_string !best_sol.tree;
-                    simplified = M.to_string simpl;
-                    smtlib = M.to_smtlib simpl; 
-                    time_synthesis = 0.0;
-                    time_simplify = 0.0;
-                }
-            with Halt ->
-                let simpl = M.simplify !best_sol.tree in
-                { 
-                    (* Return Timeout *)
-                    success = D.is_zero !best_sol.cost ;
-                    expression = M.to_string !best_sol.tree;
-                    simplified = M.to_string simpl;
-                    smtlib = M.to_smtlib simpl; 
-                    time_synthesis = 0.0;
-                    time_simplify = 0.0;
-                }
-
-        with Halt -> failwith no_time_message
+            begin
+                try
+                    loop t0 !best_sol 1;
+                with Halt -> ()
+            end;
+            let simpl = M.simplify !best_sol.tree in
+            { 
+                (* Return the solution *)
+                success = D.is_zero !best_sol.cost ;
+                expression = M.to_string !best_sol.tree;
+                simplified = M.to_string simpl;
+                smtlib = M.to_smtlib simpl; 
+                size = M.get_expr_size simpl;
+                time_synthesis = 0.0;
+                time_simplify = 0.0;
+            }
+        with Halt -> raise SynthesisNotStarted
 end
 
-(** Arithmetic distance **)
-let mk_arith () =
-    (module struct
-        let dist x y = Float.abs (Float.of_int ((Bitvector.to_int x) - (Bitvector.to_int y)))
-
-        let is_zero x = abs_float x < 0.5
-    end : Dist)
-
-(** Hamming distance **)
-let mk_hamming () =
-    (module struct
-        let dist x y =
-            let rec nb_ones x i = 
-                let bit = 
-                    if Bitvector.get_bit x i then
-                        1
-                    else 
-                        0
-                in
-                if i <> 0 then
-                    bit + (nb_ones x (i-1))
-                else
-                    bit
-            in
-            let xored = Bitvector.logand (Bitvector.logor x y) (Bitvector.lognot (Bitvector.logand x y)) in
-            let hamming = nb_ones xored ((Bitvector.size_of x)-1) in
-            Float.of_int hamming
-        (*
-        let dist x y =
-            let rec aux acc v =
-                if Bitvector.is_zero v then acc
-                else
-                    aux (acc + 1) (Bitvector.logand v (Bitvector.sub v Bitvector.one))
-            in
-            float (aux 0 (Bitvector.sub x y))
-        *)
-
-        let is_zero x = abs_float x < 0.5 
-    end : Dist)
-
-(** Xor distance **)
-let mk_xor () =
-    (module struct
-        let dist x y =
-            let xored = Bitvector.logand (Bitvector.logor x y) (Bitvector.lognot (Bitvector.logand x y)) in
-            Bitvector.to_float xored
-
-        let is_zero x = abs_float x < 0.5
-    end : Dist)
-
-(** Logarithmetic distance **)
-let mk_logarith () =
-    (module struct
-        let dist x y = 
-            let arithme = Float.abs (Float.of_int ((Bitvector.to_int x) - (Bitvector.to_int y))) in
-            (Float.log (arithme +. 1.)) /. (Float.log 2.) 
-
-        let is_zero x = abs_float x < 0.5
-    end : Dist)
-
-(** Distance used by Syntia in the paper "Syntia: Synthesizing the Semantics of Obfuscated Code" by Blazytko et al. **)
-let mk_syntia () =
-    (module struct
-        let dist_arith x y = 
-            let n = Float.abs (Float.of_int ((Bitvector.to_int x) - (Bitvector.to_int y))) in
-            let fl_sz = Float.of_int (Bitvector.size_of x) in
-            let divisor = (2. ** fl_sz) -. 1. in
-            n /. divisor 
-
-        let dist_hamm x y =
-            let rec nb_ones x i = 
-                let bit = 
-                    if Bitvector.get_bit x i then
-                        1
-                    else 
-                        0
-                in
-                if i <> 0 then
-                    bit + (nb_ones x (i-1))
-                else
-                    bit
-            in
-            let fl_sz = Float.of_int (Bitvector.size_of x) in
-            let xored = Bitvector.logand (Bitvector.logor x y) (Bitvector.lognot (Bitvector.logand x y)) in
-            let hamming = nb_ones xored ((Bitvector.size_of x)-1) in
-            (Float.of_int hamming) /. fl_sz
-
-        let trailing_ones x y =
-            let rec last_ones x i =
-                let bit = 
-                    if Bitvector.get_bit x i then
-                        1 
-                    else
-                        0
-                in
-                match bit, i with
-                | _, v when v = (Bitvector.size_of x) -1 -> bit
-                | 0, _ -> 0
-                | 1, _ -> 1 + last_ones x (i+1)
-                | _, _ -> assert false
-            in
-            let fl_sz = Float.of_int (Bitvector.size_of x) in
-            (Float.abs ((Float.of_int (last_ones x 0)) -. (Float.of_int (last_ones y 0)))) /. fl_sz
-
-        let trailing_zeros x y =
-            let rec last_zeros x i =
-                let bit = 
-                    if Bitvector.get_bit x i then
-                        1
-                    else
-                        0 
-                in
-                match bit, i with
-                | _, v when v = (Bitvector.size_of x) -1 -> bit
-                | 1, _ -> 0
-                | 0, _ -> 1 + last_zeros x (i+1)
-                | _, _ -> assert false
-            in
-            let fl_sz = Float.of_int (Bitvector.size_of x) in
-            (Float.abs ((Float.of_int (last_zeros x 0)) -. (Float.of_int (last_zeros y 0)))) /. fl_sz
-
-        let leading_ones x y =
-            let rec first_ones x i =
-                let bit = 
-                    if Bitvector.get_bit x i then
-                        1 
-                    else
-                        0
-                in
-                match bit, i with
-                | _, 0 -> bit
-                | 0, _ -> 0
-                | 1, _ -> 1 + first_ones x (i-1)
-                | _, _ -> assert false
-            in
-            let fl_sz = Float.of_int (Bitvector.size_of x) in
-            (Float.abs ((Float.of_int (first_ones x ((Bitvector.size_of x)-1))) -. (Float.of_int (first_ones y ((Bitvector.size_of y)-1))))) /. fl_sz
-
-        let leading_zeros x y =
-            let rec first_zeros x i =
-                let bit = 
-                    if Bitvector.get_bit x i then
-                        1 
-                    else
-                        0
-                in
-                match bit, i with
-                | _, 0 -> bit
-                | 1, _ -> 0
-                | 0, _ -> 1 + first_zeros x (i-1)
-                | _, _ -> assert false
-            in
-            let fl_sz = Float.of_int (Bitvector.size_of x) in
-            (Float.abs ((Float.of_int (first_zeros x ((Bitvector.size_of x)-1))) -. (Float.of_int (first_zeros y ((Bitvector.size_of y)-1))))) /. fl_sz
-
-        let dist x y = ((dist_arith x y) +. (dist_hamm x y) +. (trailing_zeros x y) +. (trailing_ones x y) +. (leading_zeros x y) +. (leading_ones x y)) /. 6.
-
-
-        let is_zero x = abs_float x = 0.0
-    end : Dist)
-
 (** Select from a string which distance to use **)
-let of_string (module D : Dist) (module O : Oracle.ORACLE) (module MU : Tree.MUTATIONS) = function
-| "ils" -> (module Mk_iterated_local_search (D) (O) (MU) : S)
-| "hc" -> (module Mk_hill_climbing (D) (O) (MU) : S)
-| "rw" -> (module Mk_random_walk (D) (O) (MU) : S)
-| "sa" -> (module Mk_simulated_annealing (D) (O) (MU) : S)
-| "mh" -> (module Mk_metropolis_hastings (D) (O) (MU) : S)
+let of_string (module D : VECDIST) (module O : Oracle.ORACLE) (module M : Tree.MUTATOR) = function
+| "ils" -> (module Mk_iterated_local_search (D) (O) (M) : S)
+| "hc" -> (module Mk_hill_climbing (D) (O) (M) : S)
+| "rw" -> (module Mk_random_walk (D) (O) (M) : S)
+| "sa" -> (module Mk_simulated_annealing (D) (O) (M) : S)
+| "mh" -> (module Mk_metropolis_hastings (D) (O) (M) : S)
 | _ -> invalid_arg "Undefined heuristic option"

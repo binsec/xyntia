@@ -3,14 +3,14 @@
         "inputs": {
             "0": {
                 "location": "DL", 
-                "size": "0x1", 
+                "size": "0x8", 
                 "value": "0x03"
             }
         }, 
         "outputs": {
             "0": {
                 "location": "AL", 
-                "size": "0x1", 
+                "size": "0x8", 
                 "value": "0x06"
             }
         }
@@ -20,14 +20,14 @@
             "inputs": {
                 "0": {
                     "location": "DL", 
-                    "size": "0x1", 
+                    "size": "0x8", 
                     "value": "0x1a"
                 }
             }, 
             "outputs": {
                 "0": {
                     "location": "AL", 
-                    "size": "0x1", 
+                    "size": "0x8", 
                     "value": "0x34"
                 }
             }

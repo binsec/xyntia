@@ -1,7 +1,7 @@
 ##########################################################################
 #  This file is part of BINSEC.                                          #
 #                                                                        #
-#  Copyright (C) 2019-2022                                               #
+#  Copyright (C) 2019-2025                                               #
 #    CEA (Commissariat à l'énergie atomique et aux énergies              #
 #         alternatives)                                                  #
 #                                                                        #
@@ -19,37 +19,53 @@
 #                                                                        #
 ##########################################################################
 
+#!/usr/bin/env python3
+
 from pathlib import Path
-from plumbum import local
 import argparse
 import json
-import os
-import sys
 
-#xyntia = local["/home/greg/Documents/CEA/CAUIM/cauim-greybox-program-synthesis/_build/default/bin/main.exe"]
-xyntia = local["xyntia"]
+def mean(l):
+    if len(l) == 0:
+        return None
+    return round(sum(l) / len(l), 4)
 
-def main(sampledir, timeout, outdir):
-    for samplefile in Path(sampledir).glob("*.json"):
-        try:
-            res = xyntia["-heur", "ils", "-time", timeout, "-dist", "arith", "-strat", "full", samplefile]()
-            with open(outdir + "/" + samplefile.stem + ".txt", "w") as f:
-                f.write(res)
-        except Exception as e:
-            print(e)
+def display_stats(stats):
+    print("Mean success rate: {}%".format(100*mean(stats["successes"])))
+    print("Mean equiv. rate: {} - {}%".format(100*mean(stats["equiv_lower"]), 100*mean(stats["equiv_upper"])))
+    print("Mean quality: {}".format(mean(stats["qualities"])))
 
-if __name__ == "__main__":
+def main(directory):
+    stats = {
+        "successes": [],
+        "equiv_lower": [],
+        "equiv_upper": [],
+        "qualities": []
+    }
+
+    for resfile in (directory / "synthesized").glob("*/*.json"):
+        with open(resfile, "r") as f:
+            res = json.load(f)
+        
+        stats["successes"].append(res["success"] == "yes")
+        if res["success"] == "yes":
+            stats["equiv_lower"].append(res["equiv"] == "yes")
+            stats["equiv_upper"].append(res["equiv"] != "no")
+            if res["equiv"] != "no" and res.get("quality"):
+                stats["qualities"].append(res["quality"])
+        else:
+            stats["equiv_lower"].append(False)
+            stats["equiv_upper"].append(False)
+
+
+
+
+    display_stats(stats)
+
+
+
+if __name__  == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir', required=True, type=str, help="directory containing samples (with 1 output)")
-    parser.add_argument('--timeout', required=True, type=int, help="synthesis timeout")
-    parser.add_argument('--out', required=True, type=str, help="output directory")
-    
+    parser.add_argument('--dir', required=True, type=str, help="directory where results are stored")
     args = parser.parse_args()
-    
-    if os.path.exists(args.out):
-        print("[ARG ERROR] --out should not exists", file=sys.stderr)
-        sys.exit(1)
-
-    os.mkdir(args.out)
-
-    main(args.dir, args.timeout, args.out)
+    main(Path(args.dir))

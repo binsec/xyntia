@@ -19,23 +19,34 @@
 (*                                                                        *)
 (**************************************************************************)
 
-type summary = {
-    success : bool ;
-    expression : string ;
-    simplified : string ;
-    smtlib : string ;
-    size : int;
-    time_synthesis : float;
-    time_simplify : float;
-}
-
-module type S = sig
-    val search : int -> summary
+module type DIST = sig
+  val dist : Bitvector.t -> Bitvector.t -> float
+  val is_zero : float -> bool
 end
 
-module Mk_iterated_local_search (D: Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* ils *)
-module Mk_random_walk           (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* rw  *)
-module Mk_hill_climbing         (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* hc  *)
-module Mk_simulated_annealing   (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* sa  *)
+module type VECDIST = sig
+  val vecdist : Bitvector.t array -> Bitvector.t array -> float
+  val is_zero : float -> bool
+  val extract : Tree.t -> Bitvector.t array -> Bitvector.t array -> Tree.t
+end
 
-val of_string : (module Distance.VECDIST) -> (module Oracle.ORACLE) -> (module Tree.MUTATOR) -> string -> (module S)
+module Arith : DIST
+(** Arithmetic distance **)
+
+module Hamming : DIST
+(** Hamming distance **)
+
+module Xor : DIST
+(** Xor distance **)
+
+module Logarith : DIST
+(** Logarithmetic distance **)
+
+module Syntia : DIST
+(** Distance used by Syntia in the paper "Syntia: Synthesizing the Semantics of Obfuscated Code" by Blazytko et al. **)
+
+val dist_vec : float array -> float
+(** How do we aggregate the distance along a vector of input output *)
+
+val vectorizeDist : (float array -> float) -> (module DIST) -> (module VECDIST)
+(** Transform a bitvector distance into a (in,out) vector distance *)

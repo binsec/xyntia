@@ -1,8 +1,9 @@
 (executable
+        (public_name xyntia)
+        (package xyntia)
 	(name main)
-	(libraries unix utils))
-(install
-    (files (main.exe as xyntia))
-    (section bin)
-    (package xyntia)
-)
+	(libraries unix xyntia_utils binsec binsec.smt 
+        binsec.armv7decoder
+        binsec.amd64decoder
+        binsec.armv8decoder
+        binsec.ppc64decoder))

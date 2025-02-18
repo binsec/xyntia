@@ -1,7 +1,8 @@
+#!/usr/bin/env python3
 ##########################################################################
 #  This file is part of BINSEC.                                          #
 #                                                                        #
-#  Copyright (C) 2019-2022                                               #
+#  Copyright (C) 2019-2025                                               #
 #    CEA (Commissariat à l'énergie atomique et aux énergies              #
 #         alternatives)                                                  #
 #                                                                        #
@@ -21,6 +22,7 @@
 
 import argparse
 import gdb
+import re
 import os
 import sys
 
@@ -46,6 +48,14 @@ def instn_length(addr_expr):
     t = gdb.execute('x/2i ' + addr_expr, to_string=True)
     return toint(gdb.parse_and_eval('$_')) - toint(gdb.parse_and_eval(addr_expr))
 
+def isJumpInstr(addr_expr):
+    t = gdb.execute('x/i ' + addr_expr, to_string=True)
+    t = t.split(":")[1].strip()
+    if "j" in t:
+        return True
+    else:
+        return False
+    
 
 def parse_opcodes(string):
     """
@@ -75,8 +85,19 @@ class TraceDisassembler(gdb.Command):
         info = gdb.execute("p main", True, True)
         assert "0x" in info, "No symbol for the main function"
 
-        gdb.execute("b *main") # break at the real start of main (!= b main) 
-        gdb.execute("r {}".format(args)) # run with arguments
+        info = gdb.execute("b *main", True, True) # break at the real start of main (!= b main) 
+        baddr = [ int(i, 16) for i in re.findall(r"0x[a-f0-9]+", info) ]
+        assert len(baddr) == 1
+        baddr = baddr[0]
+
+        gdb.execute("r {}".format(args), True, True) # run with arguments
+        info = gdb.execute("p $pc", True, True) # run with arguments
+        gdb_baddr = [ int(i, 16) for i in re.findall(r"0x[a-f0-9]+", info) ]
+        assert len(gdb_baddr) == 1
+        gdb_baddr = gdb_baddr[0]
+
+        self.base_addr = gdb_baddr - baddr
+
         self.binname = self._getbinname()
         self.end = self._get_end()
         self.lower, self.upper = self._getbinarymapping()
@@ -116,28 +137,31 @@ class TraceDisassembler(gdb.Command):
         print("end = ", end)
         return end
 
-
     def invoke(self, args, from_tty):
         blockopcodes = []
         nextrip = None
         blockaddr = None
         addr = None
+        old_addr = None
         instrsize = None
+        ninstr = 0
 
         while addr == None or addr != self.end:
+            old_addr = addr
             addr = toint(gdb.selected_frame().read_register('pc'))
 
             if blockaddr == None:
                 blockaddr = addr
 
-            if nextrip != None and nextrip != addr:
+            if (nextrip != None and nextrip != addr) or (isJumpInstr(str(old_addr)) if old_addr != None else False):
                 assert(instrsize != None)
                 # Save block
-                if not self.filter_blocks(blockaddr, blockopcodes[:-instrsize]):
+                if not self.filter_blocks(blockaddr, blockopcodes[:-instrsize], ninstr):
                     self._saveOpcodes(blockaddr, blockopcodes[:-instrsize])
 
                 blockaddr = addr
                 blockopcodes = []
+                ninstr = 0
 
             instrsize = instn_length(str(addr))
             nextrip = addr + instrsize
@@ -145,17 +169,21 @@ class TraceDisassembler(gdb.Command):
             opcodes = parse_opcodes(gdb.execute("x/{}b {}".format(instrsize, addr), True, True))
 
             blockopcodes += opcodes
+            ninstr += 1
 
             _ = gdb.execute("stepi", True, True)
 
         assert(instrsize != None)
         self._saveOpcodes(blockaddr, blockopcodes[:-instrsize]) # save last opcodes 
 
-    def filter_blocks(self, blockaddr, opcodes):
+    def filter_blocks(self, blockaddr, opcodes, ninstr):
         """
         Filter blocks we don't want ot synthesize (e.g. because there are to little)"
         """
-        if len(opcodes) <= 1:
+        if ninstr <= 2: # 2 because the last one is removed by default
+            return True
+
+        elif len(opcodes) <= 1:
             return True
 
         elif blockaddr < self.lower or blockaddr > self.upper:
@@ -165,7 +193,7 @@ class TraceDisassembler(gdb.Command):
             return False
 
     def _saveOpcodes(self, blockaddr, opcodes):
-        blockfile = "{}/{}.bin".format(self.dir, hex(blockaddr))
+        blockfile = "{}/{}.bin".format(self.dir, hex(blockaddr - self.base_addr))
         rawops = b"".join([ tobytes(op) for op in opcodes ])
 
         with open(blockfile, "wb") as f:

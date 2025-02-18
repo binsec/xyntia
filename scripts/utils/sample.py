@@ -1,8 +1,7 @@
-#!/bin/bash
 ##########################################################################
 #  This file is part of BINSEC.                                          #
 #                                                                        #
-#  Copyright (C) 2019-2022                                               #
+#  Copyright (C) 2019-2025                                               #
 #    CEA (Commissariat à l'énergie atomique et aux énergies              #
 #         alternatives)                                                  #
 #                                                                        #
@@ -20,32 +19,44 @@
 #                                                                        #
 ##########################################################################
 
-bin=$1
-out=$2
+from plumbum import local
+import argparse
+import tempfile
 
-if [[ "$bin" = "" ]];then
-    echo "[ARG ERROR] $(basename $0) takes as argument the directory of the binary"
-    exit 1
-fi
 
-if [[ "$out" = "" ]];then
-    echo "[ARG ERROR] $(basename $0) takes as argument the output directory"
-    exit 1
-fi
+xyntia = local["xyntia"]
 
-binname=$(basename $bin)
-cfgdir="$PWD/$out/$binname/cfgs"
-samplesdir="$PWD/$out/$binname/samples"
+config = """\
+starting from 0x0
 
-mkdir $samplesdir
+set optimal sampling
 
-i=0
-for trace in $(ls $cfgdir);do
-    echo $i
-    #echo [INFO] Sample $cfgdir/$trace
-    outdir="$samplesdir/${trace%.*}"
+prune constant outputs
+explore all
 
-    python3 ./scripts/utils/binsec/sample.py --bin $cfgdir/$trace --out $outdir
-    i=$((i+1))
-done | tqdm --total $(ls $cfgdir |wc -l) >> /dev/null
 
+hook  <.raw:size> with 
+    sample 100
+    halt
+end
+"""
+
+def main(outdir, binary, arch):
+    with tempfile.NamedTemporaryFile(mode="w") as tmp:
+        tmp.write(config)
+        tmp.flush()
+        xyntia["-isa", arch,
+               "-sample-only",
+               "-bin", binary, "-config", tmp.name,
+               "-sampleout", outdir
+        ]()
+    return 
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--bin', required=True, type=str, help="binary to load")
+    parser.add_argument('--arch', required=True, type=str, help="architecture to give to binsec")
+    parser.add_argument('--out', required=True, type=str, help="output directory")
+    args = parser.parse_args()
+
+    main(args.out, args.bin, args.arch)

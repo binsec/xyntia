@@ -19,23 +19,15 @@
 (*                                                                        *)
 (**************************************************************************)
 
-type summary = {
-    success : bool ;
-    expression : string ;
-    simplified : string ;
-    smtlib : string ;
-    size : int;
-    time_synthesis : float;
-    time_simplify : float;
-}
+val fold2 :
+  f:('acc -> 'b -> 'c -> 'acc) -> init:'acc -> 'b array -> 'c array -> 'acc
 
-module type S = sig
-    val search : int -> summary
-end
+val map3 :
+  ('a -> 'b -> 'c -> 'd) -> 'a array -> 'b array -> 'c array -> 'd array
 
-module Mk_iterated_local_search (D: Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* ils *)
-module Mk_random_walk           (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* rw  *)
-module Mk_hill_climbing         (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* hc  *)
-module Mk_simulated_annealing   (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* sa  *)
+(* Computes the minimum element of the list, returning the Some (element, cost) if it exists and None else *)
+val min_list : ('a -> 'b) -> 'a list -> ('a * 'b) option
 
-val of_string : (module Distance.VECDIST) -> (module Oracle.ORACLE) -> (module Tree.MUTATOR) -> string -> (module S)
+val bv_to_smtlib : Bitvector.t -> string
+
+val cst_to_smtlib : int -> int -> string

@@ -1,7 +1,7 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2022                                               *)
+(*  Copyright (C) 2019-2025                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
@@ -32,15 +32,10 @@ type sample = {
 type t = {
     ctx     : variable array * variable ;
     consts  : constant array ;
-    samples : sample array   ;
+    mutable samples : sample array   ;
     ops : string list option ;
+    orig_size : int option;
 }
-
-
-(** Strategy used to sample inputs **)
-module type SamplingStrat = sig 
-  val gen_random_int : unit -> int array array
-end
 
 (** Oracle **)
 module type ORACLE = sig
@@ -59,6 +54,11 @@ module type ORACLE = sig
     val ops : unit -> string list option
     val const_of_int : int -> int -> constant
     val const_of_bitv : Bitvector.t -> constant
+    val get_sample : int -> sample
+    val sample_output : sample -> variable * Bitvector.t
+    val sample_inputs : sample -> (variable * Bitvector.t) array
+    val add_sample : (variable * Bitvector.t) array -> (variable * Bitvector.t) -> unit 
+    val get_expr_size : unit -> int option
 end
 
 let ops {ops ; _} = ops
@@ -72,6 +72,10 @@ let nvars t = Array.length (fst t.ctx)
 let nconsts t = Array.length (t.consts)
 
 let nsamples { samples ; _ } = Array.length samples
+
+let output_of_sample sample = sample.res
+let inputs_of_sample sample = sample.vars
+
 
 let var_values t (var : variable) =
     let rec aux vars name n i =
@@ -89,8 +93,8 @@ let out_values { samples ; _ } = Array.map (fun { res ; _ } -> snd res) samples
 
 let out_var { ctx = (_, var) ; _ } = var
 
-let const_of_int value sz = {name=(string_of_int value); value=(Bitvector.of_int value sz)}
-let const_of_bitv value = { name=(Bitvector.print_dec value); value=value}
+let const_of_int value sz = {name=(string_of_int value); value=(Bitvector.of_int ~size:sz value)}
+let const_of_bitv value = { name=(Bitvector.to_string value); value=value}
 
 (** Create a variable **)
 let mk_var name sz =
@@ -108,7 +112,7 @@ let random_var t =
 let random_const t =
     (t.consts).(Random.int (Array.length t.consts))
 
-let to_int json = int_of_string (to_string json)
+let hex_to_int json = int_of_string (to_string json)
 let to_string json = String.lowercase_ascii (to_string json)
 
 (** Extract sampled inputs from json file **)
@@ -118,11 +122,11 @@ let get_sample_input json =
         (fun (_, t) ->
             let var = {
                 name = to_string (member "location" t) ;
-                sz =  to_int (member "size" t) * 8 ;
+                sz =  hex_to_int (member "size" t);
             }
             in
-            let value = Bitvector.extend
-                            (Bitvector.of_hexstring (to_string (member "value" t)))
+            let value = Bitvector.create
+                            (Z.of_string (to_string (member "value" t)))
                             var.sz
             in
             (var, value))
@@ -133,11 +137,11 @@ let get_sample_output json =
     let json = member "0" json in
     let var = {
         name = to_string (member "location" json) ;
-        sz   = to_int (member "size" json) * 8    ;
+        sz   = hex_to_int (member "size" json);
     }
     in
     let hex_val = to_string (member "value" json) in
-    (var, Bitvector.extend (Bitvector.of_hexstring hex_val) var.sz)
+    (var, Bitvector.create (Z.of_string hex_val) var.sz)
 
 (** Extract sampled inputs and observed outputs from json file **)
 let get_sample json = {
@@ -157,14 +161,14 @@ let get_meta_inputs json =
     |> List.map
         (fun (_, t) ->
             { name = to_string (member "location" t) ;
-            sz = to_int (member "size" t) * 8 })
+            sz = hex_to_int (member "size" t)})
     |> Array.of_list
 
 (** Extract outputs meta information from json file **)
 let get_meta_output json =
     let json = json |> member "initial" |> member "outputs" |> member "0" in
     let name = to_string (member "location" json) in
-    let size = to_int (member "size" json) * 8 in
+    let size = hex_to_int (member "size" json) in
     mk_var name size
 
 
@@ -178,8 +182,12 @@ let get_ops json =
     with Type_error (_, _) -> None
 
 let get_size json =
-    to_int (json |> member "initial" |> member "outputs" |> member "0" |> member "size") * 8
+    hex_to_int (json |> member "initial" |> member "outputs" |> member "0" |> member "size")
 
+let get_expr_size json =
+    match json |> member "info" with
+    | `Null -> -1
+    | m -> to_int (member "exprsize" m)
 
 (** Create constant values between min and max **)
 let mk_consts min max sz =
@@ -204,16 +212,13 @@ let print t =
     in
     print_context t; print_sampling t
 
-(** Create oracle from json file **)
-let of_json ~filename : (module ORACLE) =
-    let json = Yojson.Basic.from_file filename in
+let add_sample oracle inputs output = 
+    let newsample = { vars=inputs; res=output} in
+    oracle.samples <- Array.append oracle.samples [|newsample|]
+
+let gen_oracle (t : t) : (module ORACLE) = 
     (module struct
-        let oracle = {
-            ctx = get_meta json ;
-            consts = mk_consts 1 1 (get_size json) ;
-            samples = get_samplings json ;
-            ops = get_ops json           ;
-        }
+        let oracle = t
         let nvars () = nvars oracle
         let nconsts () = nconsts oracle
         let nsamples () = nsamples oracle
@@ -229,143 +234,23 @@ let of_json ~filename : (module ORACLE) =
         let ops () = ops oracle
         let const_of_int = const_of_int
         let const_of_bitv = const_of_bitv
+        let get_sample i = oracle.samples.(i)
+        let sample_inputs = inputs_of_sample
+        let sample_output = output_of_sample
+        let add_sample = add_sample oracle
+        let get_expr_size () = oracle.orig_size 
     end : ORACLE)
 
-(** Create oracle from an Ocaml function **)
-let of_fun ~f:(f : int array -> int)  ~ninputs ~sampling_sz ~const_bounds gen_random_int : (module ORACLE) =
-    let sz = 32 in
-    let randomvals = gen_random_int () in
-    let bitv_of_int x =
-        Bitvector.of_int32 (Int32.of_int x)
-    in
-    let ovar = mk_var ("x_" ^ string_of_int ninputs) sz in
-    let ctx =
-        (Array.init ninputs
-            (fun i -> mk_var ("x_" ^ string_of_int i) sz), ovar)
-    in
-    let samples =
-        Array.init sampling_sz
-            (fun i ->
-                let values = randomvals.(i)
-                in
-
-                let vars =
-                    Array.init ninputs (fun i -> ((fst ctx).(i), bitv_of_int values.(i)))
-                in
-                let res = (ovar, bitv_of_int (f values)) in
-                (*let _ = print_samples values res in*)
-                { vars ; res })
-    in
-    let min_const, max_const = const_bounds in
-    (module struct
-        let oracle = { ctx ; consts = mk_consts min_const max_const 32 ; samples ; ops = None}
-        let nvars () = nvars oracle
-        let nconsts () = nconsts oracle
-        let nsamples () = nsamples oracle
-        let var_values var = var_values oracle var
-        let const_values const = const_values oracle const
-        let out_values () = out_values oracle
-        let out_var () = out_var oracle
-        let random_var () = random_var oracle
-        let random_const () = random_const oracle
-        let print () = print oracle
-        let vars () = vars oracle
-        let consts () = consts oracle
-        let ops () = ops oracle
-        let const_of_int = const_of_int
-        let const_of_bitv = const_of_bitv
-     end : ORACLE)
-
-
-(** Generate a random integer in [-bound; bound[  **)
-let gen_tiny_int bound = 
-    let lim_sup = bound in 
-    let _ = Random.self_init () in
-    if Random.bool () then
-        Random.int lim_sup
-    else
-        -(Random.int lim_sup) - 1 
-
-(** Generate a random integer in [-2^31; 2^31[ **)
-let gen_full_int () =
-    gen_tiny_int 0x80000000
-
-(** Sample inputs with values in [-50; 50[ 
-    * and special inputs i.e. only 0 or only 1 if limits is set **)
-let tiny50 limits nargs nbio : (module SamplingStrat) = 
-    if nargs < 0 then failwith "nargs must be >= 0";
-    if nbio <= 0 then failwith "nb of I/O samples must be > 0";
-    let li = match limits with
-    | Some i ->
-            if nbio < i then failwith "with limits option, nb of I/O samples must be >= nb of limits"
-            else if i > 5 then failwith "nb of limits can't be greater than 5" 
-            else i
-    | None -> 0 
-    in
-    (module struct
-        let gen_random_int () = 
-            Array.init nbio (fun i -> 
-                if i < (nbio - li) then 
-                    (Array.init nargs (fun _ -> gen_tiny_int 50))
-                else match (i - (nbio-li)) with
-                | 0 -> Array.init nargs (fun _ -> 0)
-                | 1 -> Array.init nargs (fun _ -> 1)
-                | 2 -> Array.init nargs (fun _ -> -1)
-                | 3 -> Array.init nargs (fun _ -> 0x7fffffff)
-                | 4 -> Array.init nargs (fun _ -> 0x80000000)
-                | _ -> assert false)
-    end : SamplingStrat)
-
-
-(** Sample inputs with values in [-1000; 1000[ 
-    * and special inputs i.e. only 0 or only 1 if limits is set **)
-let tiny1000 limits nargs nbio : (module SamplingStrat) = 
-    if nargs < 0 then failwith "nargs must be >= 0";
-    if nbio <= 0 then failwith "nb of I/O samples must be > 0";
-    let li = match limits with
-    | Some i ->
-            if nbio < i then failwith "with limits option, nb of I/O samples must be >= nb of limits"
-            else if i > 5 then failwith "nb of limits can't be greater than 5" 
-            else i
-    | None -> 0 
-    in
-    (module struct
-        let gen_random_int () = 
-            Array.init nbio (fun i -> 
-                if i < (nbio - li) then 
-                    (Array.init nargs (fun _ -> gen_tiny_int 1000))
-                else match (i - (nbio-li)) with
-                | 0 -> Array.init nargs (fun _ -> 0)
-                | 1 -> Array.init nargs (fun _ -> 1)
-                | 2 -> Array.init nargs (fun _ -> -1)
-                | 3 -> Array.init nargs (fun _ -> 0x7fffffff)
-                | 4 -> Array.init nargs (fun _ -> 0x80000000)
-                | _ -> assert false)
-    end : SamplingStrat)
-
-(** Sample any 32bits values 
-    * and special inputs i.e. only 0 or only 1 if limits is set **)
-let full limits nargs nbio : (module SamplingStrat) = 
-    if nargs < 0 then failwith "nargs must be >= 0";
-    if nbio <= 0 then failwith "nb of I/O samples must be > 0";
-    let li = match limits with
-    | Some i ->
-            if nbio < i then failwith "with limits option, nb of I/O samples must be >= nb of limits"
-            else if i > 5 then failwith "nb of limits can't be greater than 5" 
-            else i
-    | None -> 0 
-    in
-    (module struct
-        let gen_random_int () = 
-            Array.init nbio (fun i -> 
-                if i < (nbio - li) then 
-                    (Array.init nargs (fun _ -> gen_full_int ()))
-                else match (i - (nbio-li)) with
-                | 0 -> Array.init nargs (fun _ -> 0)
-                | 1 -> Array.init nargs (fun _ -> 1)
-                | 2 -> Array.init nargs (fun _ -> -1)
-                | 3 -> Array.init nargs (fun _ -> 0x7fffffff)
-                | 4 -> Array.init nargs (fun _ -> 0x80000000)
-                | _ -> assert false)
-    end : SamplingStrat)
-
+(** Create oracle from json file **)
+let of_json ~filename (cst: int array): (module ORACLE) =
+    let json = Yojson.Basic.from_file filename in
+    let sz = get_size json in
+    let newcst = Array.map (fun v -> {name=Int.to_string v; value=(Bitvector.of_int ~size:sz v)}) cst in
+    let oracle = {
+        ctx = get_meta json ;
+        consts = Array.append (mk_consts 1 1 sz) newcst ;
+        samples = get_samplings json ;
+        ops = get_ops json           ;
+        orig_size = Some (get_expr_size json);
+    } in
+    gen_oracle oracle

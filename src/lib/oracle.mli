@@ -1,7 +1,7 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2022                                               *)
+(*  Copyright (C) 2019-2025                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
@@ -20,11 +20,8 @@
 (**************************************************************************)
 
 type variable = private { name : string ; sz : int }
-type constant = private { name : string ; value : Bitvector.t }
-
-module type SamplingStrat = sig 
-  val gen_random_int : unit -> int array array
-end
+type constant = { name : string ; value : Bitvector.t }
+type sample
 
 module type ORACLE = sig
     val nvars : unit -> int
@@ -42,13 +39,12 @@ module type ORACLE = sig
     val ops : unit -> string list option
     val const_of_int : int -> int -> constant
     val const_of_bitv : Bitvector.t -> constant
+    val get_sample : int -> sample
+    val sample_output : sample -> variable * Bitvector.t
+    (* TODO : Temporary, we should prevent the modification but easier for now *)
+    val sample_inputs : sample -> (variable * Bitvector.t) array
+    val add_sample : (variable * Bitvector.t) array -> (variable * Bitvector.t) -> unit 
+    val get_expr_size : unit -> int option
 end
 
-val of_json : filename:string -> (module ORACLE)
-
-val of_fun : f:(int array -> int) -> ninputs:int ->
-                sampling_sz:int -> const_bounds:int*int -> (unit -> int array array) -> (module ORACLE)
-
-val tiny50 : int option -> int -> int -> (module SamplingStrat)
-val tiny1000 : int option -> int -> int -> (module SamplingStrat)
-val full : int option -> int -> int -> (module SamplingStrat)
+val of_json : filename:string -> int array -> (module ORACLE)

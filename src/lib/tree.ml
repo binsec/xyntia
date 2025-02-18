@@ -1,7 +1,7 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2022                                               *)
+(*  Copyright (C) 2019-2025                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
@@ -19,47 +19,58 @@
 (*                                                                        *)
 (**************************************************************************)
 
+open Utility
+
 let select omega =
     omega.(Random.int (Array.length omega))
 
-type unop_t = Minus | Not | Extend of int | Sextend of int | Reduce of int
+module type XOP = sig
+    type t
+    val rand : unit -> t   
+    val cardinal : unit -> int
+    val to_string : t -> string
+    val to_smtlib : t -> string
+end
+
+type unop_t = Minus | Not | Extend of int | Sextend of int | Reduce of int | Byteswap | Ehad | Arba | Shesh | Smol
 
 module type UNOP = sig
-    val rand : unit -> unop_t
-    val cardinal : unit -> int
+    include XOP with type t := unop_t
     val apply : unop_t -> Bitvector.t -> Bitvector.t
-    val to_string : unop_t -> string
-    val to_smtlib : unop_t -> string
     val is_sz_modifier : unop_t -> bool
+
+    val to_sygus : unop_t -> string -> int -> string
 end
 
 module Mk_Unop (Oracle : Oracle.ORACLE) : UNOP = struct
-    let number = 2
+    let number = 7
     let of_string = function
     | "not" -> Some Not
     | "neg" -> Some Minus
+    | "bswap" -> Some Byteswap
+    | "ehad" -> Some Ehad
+    | "arba" -> Some Arba
+    | "shesh" -> Some Shesh
+    | "smol" -> Some Smol
     | _ -> None
 
     let of_int = function
     | 0 -> Minus
     | 1 -> Not
+    | 2 -> Byteswap
+    | 3 -> Byteswap
+    | 4 -> Ehad
+    | 5 -> Arba
+    | 6 -> Shesh
+    | 7 -> Smol
     | _ -> assert false
 
     let omega =
         match Oracle.ops () with
         | None -> Array.init number of_int
         | Some ops ->
-            let unops = List.filter
-                (function Some _ -> true | None -> false)
-                (List.map of_string ops)
-            in
-            let unops = Array.of_list
-                (List.map (
-                    function
-                    | Some x -> x
-                    | _ -> assert false) unops)
-            in
-            if Array.length unops = 0 then [| Minus |] else unops
+            let unops = Array.of_list (List.filter_map of_string ops) in
+            if Array.length unops = 0 then [| of_int 0 |] else unops
 
     let rand () =  select omega
     let cardinal () = Array.length omega
@@ -73,6 +84,11 @@ module Mk_Unop (Oracle : Oracle.ORACLE) : UNOP = struct
     | Extend sz -> Bitvector.extend x sz
     | Sextend sz -> Bitvector.extend_signed x sz
     | Reduce sz -> Bitvector.reduce x sz
+    | Byteswap -> Bitvector.byteswap x
+    | Ehad -> Bitvector.shift_right x 1
+    | Arba -> Bitvector.shift_right x 4
+    | Shesh -> Bitvector.shift_right x 16
+    | Smol -> Bitvector.shift_left x 1
 
     let to_string = function
     | Minus -> "-"
@@ -80,6 +96,11 @@ module Mk_Unop (Oracle : Oracle.ORACLE) : UNOP = struct
     | Extend sz -> Printf.sprintf "%dext" sz
     | Sextend sz -> Printf.sprintf "%dsext" sz
     | Reduce sz -> Printf.sprintf "%dred" sz
+    | Byteswap -> "bswap"
+    | Ehad -> "ehad"
+    | Arba -> "arba"
+    | Shesh -> "shesh"
+    | Smol -> "smol"
 
     let to_smtlib = function
     | Minus -> "bvneg"
@@ -87,20 +108,44 @@ module Mk_Unop (Oracle : Oracle.ORACLE) : UNOP = struct
     | Extend sz -> Printf.sprintf "(_ zero_extend %d)" sz
     | Sextend sz -> Printf.sprintf "(_ sign_extend %d)" sz
     | Reduce sz -> Printf.sprintf "(_ extract %d 0)" (sz-1)
+    | Byteswap -> "bswap"
+    | Ehad -> "ehad"
+    | Arba -> "arba"
+    | Shesh -> "shesh"
+    | Smol -> "smol"
+
+    let to_sygus op term1 sz1 = match op with
+    | Minus -> Format.sprintf "(bvneg %s)" term1
+    | Not -> Format.sprintf "(bvnot %s)" term1
+    | Extend sz -> Printf.sprintf "((_ zero_extend %d) %s)" (sz - sz1) term1
+    | Sextend sz -> Printf.sprintf "((_ sign_extend %d) %s)" (sz - sz1) term1
+    | Reduce sz -> Printf.sprintf "(_ extract %d 0)" (sz-1)
+    | Byteswap -> 
+        let rec loop i =
+            if i+8 == sz1 then
+                Format.sprintf "((_ extract %d %d) %s)" (i+8-1) i term1
+            else
+                Format.sprintf "(concat ((_ extract %d %d) %s) %s)" (i+8-1) i term1 (loop (i+8))
+        in
+        loop 0
+    | Ehad -> Format.sprintf "(bvlshr %s %s)" term1 (cst_to_smtlib 1 sz1)
+    | Arba -> Format.sprintf "(bvlshr %s %s)" term1 (cst_to_smtlib 4 sz1)
+    | Shesh -> Format.sprintf "(bvlshr %s %s)" term1 (cst_to_smtlib 16 sz1)
+    | Smol -> Format.sprintf "(bvshl %s %s)" term1 (cst_to_smtlib 1 sz1)
 end
 
-type binop_t = Add | Sub | Mul | And | Or | Xor | RShiftu | LShift | RShifts
+type binop_t = Add | Sub | Mul | And | Or | Xor | RShiftu | LShift | RShifts | RotateRight 
+                | Div_x86 | SDiv_x86 | Mod_x86 | SMod_x86 | RShiftu_x86 | LShift_x86 | RShifts_x86
+
 
 module type BINOP = sig
-    val rand : unit -> binop_t
-    val cardinal : unit -> int
+    include XOP with type t := binop_t
     val apply : binop_t -> Bitvector.t -> Bitvector.t -> Bitvector.t
-    val to_string : binop_t -> string
-    val to_smtlib : binop_t -> string
+    val to_sygus : binop_t -> string -> int -> string -> int -> string
 end
 
 module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
-    let number = 9 (* number of operators*)
+    let number = 17 (* number of operators*)
 
     let of_string = function
     | "add" -> Some Add
@@ -112,6 +157,14 @@ module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
     | "rshiftu" -> Some RShiftu
     | "lshift" -> Some LShift
     | "rshifts" -> Some RShifts
+    | "ror" -> Some RotateRight
+    | "div_x86" -> Some Div_x86
+    | "sdiv_x86" -> Some SDiv_x86
+    | "mod_x86" -> Some Mod_x86
+    | "smod_x86" -> Some SMod_x86
+    | "rshiftu_x86" -> Some RShiftu_x86
+    | "lshift_x86" -> Some LShift_x86
+    | "rshifts_x86" -> Some RShifts_x86
     | _ -> None
 
     let of_int = function
@@ -124,24 +177,22 @@ module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
     | 6 -> RShiftu
     | 7 -> LShift
     | 8 -> RShifts
+    | 9 -> RotateRight
+    | 10 -> Div_x86
+    | 11 -> SDiv_x86
+    | 12 -> Mod_x86
+    | 13 -> SMod_x86
+    | 14 -> RShiftu_x86
+    | 15 -> LShift_x86
+    | 16 -> RShifts_x86
     | _ -> assert false
 
     let omega =
         match Oracle.ops () with
         | None -> Array.init number of_int
         | Some ops ->
-            let binops = List.filter
-                (function Some _ -> true | None -> false)
-                (List.map of_string ops)
-            in
-            let binops = Array.of_list
-                (List.map (
-                    function
-                    | Some x -> x
-                    | _ -> assert false
-                ) binops)
-            in
-            if Array.length binops = 0 then [| Add |] else binops
+            let binops = Array.of_list (List.filter_map of_string ops) in
+            if Array.length binops = 0 then [| of_int 0 |] else binops
 
     let to_string = function
     | Add -> "+"
@@ -153,6 +204,14 @@ module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
     | RShiftu -> ">>u"
     | LShift -> "<<"
     | RShifts -> ">>s"
+    | RotateRight -> "ror"
+    | Div_x86 -> "div_x86"
+    | SDiv_x86 -> "sdiv_x86"
+    | Mod_x86 -> "mod_x86"
+    | SMod_x86 -> "smod_x86"
+    | RShiftu_x86 -> ">>u86"
+    | LShift_x86 -> "<<86"
+    | RShifts_x86 -> ">>s86"
 
     let to_smtlib = function
     | Add -> "bvadd"
@@ -164,6 +223,42 @@ module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
     | RShiftu -> "bvlshr"
     | LShift -> "bvshl"
     | RShifts -> "bvashr"
+    | RotateRight -> "rotate_right"
+    | Div_x86 -> "bvudiv"
+    | SDiv_x86 -> "bvsdiv"
+    | Mod_x86 -> "bvurem"
+    | SMod_x86 -> "bvsrem"
+    | RShiftu_x86 -> "bvlshr"
+    | LShift_x86 -> "bvshl"
+    | RShifts_x86 -> "bvashr"
+
+    let to_sygus op term1 sz1 term2 sz2 = match op with
+    | Add -> Format.sprintf "(bvadd %s %s)" term1 term2
+    | Sub -> Format.sprintf "(bvsub %s %s)" term1 term2
+    | Mul -> Format.sprintf "(bvmul %s %s)" term1 term2
+    | And -> Format.sprintf "(bvand %s %s)" term1 term2
+    | Or  -> Format.sprintf "(bvor %s %s)" term1 term2
+    | Xor -> Format.sprintf "(bvxor %s %s)" term1 term2
+    | RShiftu -> Format.sprintf "(bvlshr %s %s)" term1 term2
+    | LShift -> Format.sprintf "(bvshl %s %s)" term1 term2
+    | RShifts -> Format.sprintf "(bvashr %s %s)" term1 term2
+    | LShift_x86 | RShifts_x86 | RShiftu_x86 -> (
+        match sz1 with
+            | 64 -> Format.sprintf "(%s %s (bvand %s #x000000000000003f ))" (to_smtlib op) term1 term2
+            | 32 -> Format.sprintf "(%s %s (bvand %s #x0000001f ))" (to_smtlib op) term1 term2
+            | 16 -> Format.sprintf "(%s %s (bvand %s #x001f ))" (to_smtlib op) term1 term2
+            | 8 -> Format.sprintf "(%s %s (bvand %s #x1f ))" (to_smtlib op) term1 term2
+            | _ -> failwith "Shift SMTLIB size not supported"
+    )
+    | Div_x86 | Mod_x86 ->
+        Format.sprintf "((_ extract %d 0) (%s ((_ zero_extend %d) %s) ((_ zero_extend %d) %s)))" (sz1-1) (to_smtlib op) sz1 term1 sz1 term2    
+    | SDiv_x86 | SMod_x86 ->
+        Format.sprintf "((_ extract %d 0) (%s ((_ sign_extend %d) %s) ((_ sign_extend %d) %s)))" (sz1-1) (to_smtlib op) sz1 term1 sz1 term2 
+    | RotateRight -> 
+        let x = term1 in
+        let ysize = cst_to_smtlib sz2 sz2 in
+        let y = term2 in
+        Format.sprintf "(bvor (bvlshr %s %s) (bvshl %s (bvsub %s %s)))" x y x ysize y 
 
     let rand () = select omega
     let cardinal () = Array.length omega
@@ -176,16 +271,16 @@ module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
         match op with
         | Add -> Bitvector.add x y
         | Sub -> Bitvector.sub x y
-        | Mul -> Bitvector.umul x y
+        | Mul -> Bitvector.mul x y
         | And -> Bitvector.logand x y
         | Or  -> Bitvector.logor x y
         | Xor -> Bitvector.logxor x y
         | RShiftu -> 
             let offset = unsigned_int (Bitvector.to_int y) (Bitvector.size_of y) in
-            Bitvector.shift_right x (offset land (size -1)) 
+            Bitvector.shift_right x offset 
         | LShift -> 
             let offset = unsigned_int (Bitvector.to_int y) (Bitvector.size_of y) in
-            Bitvector.shift_left x (offset land (size -1)) 
+            Bitvector.shift_left x offset 
         | RShifts -> 
             let offset = Bitvector.to_int y in 
             if offset < 0 && (Bitvector.sgt x (Bitvector.zeros size)) then 
@@ -193,27 +288,93 @@ module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
             else if offset < 0 && (Bitvector.sle x (Bitvector.zeros size)) then 
                 Bitvector.ones size
             else 
-                Bitvector.shift_right_signed x (offset land (size -1))
+                Bitvector.shift_right_signed x offset
+        | RotateRight ->
+            let bvsize = Bitvector.of_int ~size:size size in
+            let offset = Bitvector.(urem y bvsize |> to_uint) in
+            Bitvector.rotate_right x offset
+
+        | RShiftu_x86 ->
+            let hex_mask = if Bitvector.size_of x = 64 then  "0x3f" else "0x1f" in
+            let mask_and = Bitvector.extend (Bitvector.of_hexstring hex_mask) (Bitvector.size_of y) in
+            let masked_y = Bitvector.to_int @@ Bitvector.logand y mask_and in
+            let res = Bitvector.shift_right x masked_y in
+            res
+
+        | LShift_x86 -> 
+            let hex_mask = if Bitvector.size_of x = 64 then  "0x3f" else "0x1f" in
+            let mask_and = Bitvector.extend (Bitvector.of_hexstring hex_mask) (Bitvector.size_of y) in
+            let masked_y = Bitvector.to_int @@ Bitvector.logand y mask_and in
+            let res = Bitvector.shift_left x masked_y in
+            res
+            
+        | RShifts_x86 -> 
+            let hex_mask = if Bitvector.size_of x = 64 then  "0x3f" else "0x1f" in
+            let mask_and = Bitvector.extend (Bitvector.of_hexstring hex_mask) (Bitvector.size_of y) in
+            let masked_y = Bitvector.to_int @@ Bitvector.logand y mask_and in
+            let res = Bitvector.shift_right_signed x masked_y in
+            res
+
+        | Div_x86 ->
+            if Bitvector.is_zeros y then
+                Bitvector.max_ubv size
+            else
+                let numerator_ext = Bitvector.extend x (2*size) in
+                let denominator_ext = Bitvector.extend y (2*size) in
+                let ret = Bitvector.udiv numerator_ext denominator_ext in
+                Bitvector.reduce ret size
+
+        | SDiv_x86 -> 
+            let numerator_ext = Bitvector.extend_signed x (2*size) in
+            if Bitvector.is_zeros y then
+                if Bitvector.sge numerator_ext (Bitvector.zeros (2*size)) then
+                    Bitvector.max_ubv size
+                else
+                    Bitvector.ones size
+            else
+                let denominator_ext = Bitvector.extend_signed y (2*size) in
+
+                let ret = Bitvector.sdiv numerator_ext denominator_ext in
+                Bitvector.reduce ret size
+
+        | Mod_x86 ->
+            let numerator_ext = Bitvector.extend x (2*size) in
+            let divisor = Bitvector.extend y (2*size) in
+            if Bitvector.is_zeros divisor then
+                if Bitvector.equal numerator_ext divisor then
+                    Bitvector.zeros size
+                else
+                    x
+            else
+                Bitvector.reduce (Bitvector.umod numerator_ext divisor) size
+
+        | SMod_x86 -> 
+            let numerator_ext = Bitvector.extend_signed x (2*size) in
+            let divisor = Bitvector.extend_signed y (2*size) in
+            if Bitvector.is_zeros divisor then
+                y
+            else
+                Bitvector.reduce (Bitvector.smod numerator_ext divisor) size
+    
 end
 
-type triop_t = Div | SDiv | Mod | SMod | ITE
+type triop_t = Div | SDiv | Mod | SMod | ITE | Im
 
 module type TRIOP = sig
-    val rand : unit -> triop_t
-    val cardinal : unit -> int
+    include XOP with type t := triop_t
     val apply : triop_t -> Bitvector.t -> Bitvector.t -> Bitvector.t -> Bitvector.t
-    val to_string : triop_t -> string
-    val to_smtlib : triop_t -> string
+    val to_sygus : triop_t -> string -> int -> string -> int -> string -> int -> string
 end
 
 module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
-    let number = 5
+    let number = 6
     let of_string = function
     | "div" -> Some Div
     | "sdiv" -> Some SDiv
     | "umod" -> Some Mod
     | "smod" -> Some SMod
     | "ite" -> Some ITE
+    | "im" -> Some Im
     | _ -> None
     let of_int = function
     | 0 -> Div
@@ -221,24 +382,15 @@ module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
     | 2 -> Mod
     | 3 -> SMod
     | 4 -> ITE
+    | 5 -> Im
     | _ -> assert false 
 
     let omega =
         match Oracle.ops () with
         | None -> Array.init number of_int
         | Some ops ->
-            let triops = List.filter
-                (function Some _ -> true | None -> false)
-                (List.map of_string ops)
-            in
-            let triops = Array.of_list
-                (List.map (
-                    function
-                    | Some x -> x
-                    | _ -> assert false
-                ) triops)
-            in
-            if Array.length triops = 0 then [| Div |] else triops
+            let triops = Array.of_list (List.filter_map of_string ops) in
+            if Array.length triops = 0 then [| of_int 0 |] else triops
 
     let to_string = function
     | Div -> "/"
@@ -246,6 +398,7 @@ module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
     | Mod -> "%"
     | SMod -> "%s"
     | ITE -> "if"
+    | Im -> "im"
 
     let to_smtlib = function
     | Div -> "bvudiv"
@@ -253,6 +406,18 @@ module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
     | Mod -> "bvurem"
     | SMod -> "bvsrem"
     | ITE -> "ite"
+    | Im -> "im"
+
+    let to_sygus op term1 sz1 term2 sz2 term3 sz3 = 
+    let catsize = sz1 + sz2 in
+    let size = sz3 in
+    match op with
+    | Div -> Format.sprintf "((_ extract %d 0) (bvudiv (concat %s %s) ((_ zero_extend %d) %s)))" (size-1) term1 term2 (catsize - size) term3
+    | SDiv -> Format.sprintf "((_ extract %d 0) (bvsdiv (concat %s %s) ((_ sign_extend %d) %s)))" (size-1) term1 term2 (catsize - size) term3
+    | Mod -> Format.sprintf "((_ extract %d 0) (bvurem (concat %s %s) ((_ zero_extend %d) %s)))" (size-1) term1 term2 (catsize - size) term3
+    | SMod -> Format.sprintf "((_ extract %d 0) (bvsrem (concat %s %s) ((_ sign_extend %d) %s)))" (size-1) term1 term2 (catsize - size) term3
+    | ITE -> Format.sprintf "(ite (distinct  %s (_ bv0 %d)) %s %s)" term1 sz1 term2 term3
+    | Im -> Format.sprintf "(ite (= %s %s) %s %s)" term1 (cst_to_smtlib 1 sz1) term2 term3
 
     let rand () = select omega
 
@@ -267,7 +432,7 @@ module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
             if Bitvector.is_zeros z then
                 Bitvector.max_ubv size
             else
-                Bitvector.extract (Bitvector.udiv (Bitvector.concat [x; y]) (Bitvector.extend z catsize)) 0 (size -1)
+                Bitvector.extract (Bitvector.udiv (Bitvector.concat [x; y]) (Bitvector.extend z catsize)) { lo=0; hi=size-1}
         | SDiv -> 
             let cat = Bitvector.concat [x; y] in
             if Bitvector.is_zeros z then
@@ -276,7 +441,7 @@ module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
                 else
                     Bitvector.ones size
             else
-                Bitvector.extract (Bitvector.sdiv cat (Bitvector.extend_signed z catsize)) 0 (size-1)
+                Bitvector.extract (Bitvector.sdiv cat (Bitvector.extend_signed z catsize)) {lo=0; hi=(size-1)}
         | Mod ->
             let cat = Bitvector.concat [x; y] in
             let divisor = Bitvector.extend z catsize in
@@ -286,7 +451,7 @@ module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
                 else
                     y
             else
-                Bitvector.extract (Bitvector.umod cat divisor) 0 (size-1)
+                Bitvector.extract (Bitvector.umod cat divisor) {lo=0; hi=(size-1)}
 
         | SMod -> 
             let cat = Bitvector.concat [x; y] in
@@ -294,116 +459,123 @@ module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
             if Bitvector.is_zeros divisor then
                 y
             else
-                Bitvector.extract (Bitvector.smod cat divisor) 0 (size-1)
+                Bitvector.extract (Bitvector.smod cat divisor) {lo=0; hi=(size-1)}
 
         | ITE -> 
                 if Bitvector.is_zeros x then
                     z
                 else
                     y
+        | Im -> if (Bitvector.equal x (Bitvector.ones (Bitvector.size_of x))) then y else z
 end
 
 type op_t = OP_Var of Oracle.variable | OP_Const of Oracle.constant | OP_Unop of unop_t | OP_Binop of binop_t | OP_Triop of triop_t
+
+module type MUTATION_BASE = sig
+    val spe_ops: op_t array
+end
 
 module type MUTATIONS = sig
     val all_mut : unit -> op_t array
     val unop_mut : unit -> op_t array
     val binop_mut : unit -> op_t array
     val triop_mut : unit -> op_t array
+    val unop_sygus : op_t -> string -> int -> string
+    val binop_sygus : op_t -> string -> int -> string -> int -> string
+    val triop_sygus : op_t -> string -> int -> string -> int -> string -> int -> string
 end
 
-module Mk_Mutations_Five(O : Oracle.ORACLE) : MUTATIONS = struct
+module Mk_Mutations(M: MUTATION_BASE) (O : Oracle.ORACLE) : MUTATIONS = struct 
+    module Unop = Mk_Unop (O) 
+    module Binop = Mk_Binop (O) 
+    module Triop = Mk_Triop (O) 
+
     let all_mut () = 
-        let consts = Array.init (O.nconsts ()) (fun i -> OP_Const((O.consts ()).(i))) in
-        let vars = Array.init (O.nvars ()) (fun i -> OP_Var((O.vars ()).(i))) in
-        Array.concat [ consts ; vars; [|
-                OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
-
-                OP_Unop(Minus);
-                OP_Unop(Not);
-
-                OP_Binop(Add);
-                OP_Binop(Mul);
-                OP_Binop(Or);
-        |] ]
+        let consts = Array.map (fun x -> OP_Const x) (O.consts ()) in
+        let vars = Array.map (fun x -> OP_Var x) (O.vars ()) in
+        Array.concat [ consts ; vars; M.spe_ops ]
 
     let unop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
+        Array.to_list (all_mut ()) 
+        |> List.filter (function
             | OP_Const(_) | OP_Var(_) | OP_Unop(_) -> true
-            | _ -> false
-        ) l)
+            | _ -> false)
+        |> Array.of_list
 
     let binop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
+        Array.to_list (all_mut ()) 
+        |> List.filter (function
             | OP_Const(_) | OP_Var(_) | OP_Binop(_) -> true
-            | _ -> false
-        ) l)
+            | _ -> false)
+        |> Array.of_list
 
     let triop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
+        Array.to_list (all_mut ()) 
+        |> List.filter (function
             | OP_Const(_) | OP_Var(_) | OP_Triop(_) -> true
-            | _ -> false
-        ) l)
+            | _ -> false)
+        |> Array.of_list
+    
+    let unop_sygus op nonterm1 sz1 = match op with
+    | OP_Const(c) -> 
+        let z = Bitvector.signed_of c.value in
+        let bv = Bitvector.create z sz1 in
+        bv_to_smtlib bv
+    | OP_Var(v) -> if v.sz == sz1 then v.name else ""
+    | OP_Unop(unop) -> Unop.to_sygus unop nonterm1 sz1
+    | _ -> failwith "not a unop"  
+
+    let binop_sygus op nonterm1 sz1 nonterm2 sz2 = match op with
+    | OP_Const(_) -> ""
+    | OP_Var(_) -> ""
+    | OP_Binop(binop) -> Binop.to_sygus binop nonterm1 sz1 nonterm2 sz2
+    | _ -> failwith "not a binop" 
+    
+    let triop_sygus op nonterm1 sz1 nonterm2 sz2 nonterm3 sz3 = match op with
+    | OP_Const(_) -> ""
+    | OP_Var(_) -> ""
+    | OP_Triop(triop) -> Triop.to_sygus triop nonterm1 sz1 nonterm2 sz2 nonterm3 sz3
+    | _ -> failwith "not a triop" 
 end
 
-module Mk_Mutations_Mba(O : Oracle.ORACLE) : MUTATIONS = struct
-    let all_mut () = 
-        let consts = Array.init (O.nconsts ()) (fun i -> OP_Const((O.consts ()).(i))) in
-        let vars = Array.init (O.nvars ()) (fun i -> OP_Var((O.vars ()).(i))) in
-        Array.concat [ consts ; vars; [|
-                OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+module Mk_Mutations_Five(O : Oracle.ORACLE) : MUTATIONS = 
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            (* OP_Const(O.random_const ());
+            OP_Var(O.random_var ()); *)
 
-                OP_Unop(Minus);
-                OP_Unop(Not);
+            OP_Unop(Minus);
+            OP_Unop(Not);
 
-                OP_Binop(Add);
-                OP_Binop(Sub);
-                OP_Binop(Mul);
-                OP_Binop(And);
-                OP_Binop(Or);
-                OP_Binop(Xor)
-        |] ]
+            OP_Binop(Add);
+            OP_Binop(Mul);
+            OP_Binop(Or);
+        |] 
+    end) (O)
 
-    let unop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Unop(_) -> true
-            | _ -> false
-        ) l)
+module Mk_Mutations_Mba(O : Oracle.ORACLE) : MUTATIONS = 
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            (* OP_Const(O.random_const ());
+            OP_Var(O.random_var ()); *)
 
-    let binop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Binop(_) -> true
-            | _ -> false
-        ) l)
+            OP_Unop(Minus);
+            OP_Unop(Not);
 
-    let triop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Triop(_) -> true
-            | _ -> false
-        ) l)
-end
+            OP_Binop(Add);
+            OP_Binop(Sub);
+            OP_Binop(Mul);
+            OP_Binop(And);
+            OP_Binop(Or);
+            OP_Binop(Xor)
+        |] 
+    end) (O)
 
-module Mk_Mutations_Mba_Shift(O : Oracle.ORACLE) : MUTATIONS = struct
-    let all_mut () =
-        let consts = Array.init (O.nconsts ()) (fun i -> OP_Const((O.consts ()).(i))) in
-        let vars = Array.init (O.nvars ()) (fun i -> OP_Var((O.vars ()).(i))) in
-        Array.concat [ consts ; vars; [|
-                OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+module Mk_Mutations_Mba_Shift(O : Oracle.ORACLE) : MUTATIONS =
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -417,40 +589,14 @@ module Mk_Mutations_Mba_Shift(O : Oracle.ORACLE) : MUTATIONS = struct
                 OP_Binop(RShiftu);
                 OP_Binop(RShifts);
                 OP_Binop(LShift);
-        |] ]
+        |] 
+    end) (O)
 
-    let unop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Unop(_) -> true
-            | _ -> false
-        ) l)
-
-    let binop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Binop(_) -> true
-            | _ -> false
-        ) l)
-
-    let triop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Triop(_) -> true
-            | _ -> false
-        ) l)
-end
-
-module Mk_Mutations_Mba_ITE(O : Oracle.ORACLE) : MUTATIONS = struct
-    let all_mut () = 
-        let consts = Array.init (O.nconsts ()) (fun i -> OP_Const((O.consts ()).(i))) in
-        let vars = Array.init (O.nvars ()) (fun i -> OP_Var((O.vars ()).(i))) in
-        Array.concat [ consts ; vars; [|
-                OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+module Mk_Mutations_Mba_ITE(O : Oracle.ORACLE) : MUTATIONS = 
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -463,40 +609,14 @@ module Mk_Mutations_Mba_ITE(O : Oracle.ORACLE) : MUTATIONS = struct
                 OP_Binop(Xor);
 
                 OP_Triop(ITE)
-        |] ]
+        |] 
+    end) (O)
 
-    let unop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Unop(_) -> true
-            | _ -> false
-        ) l)
-
-    let binop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Binop(_) -> true
-            | _ -> false
-        ) l)
-
-    let triop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Triop(_) -> true
-            | _ -> false
-        ) l)
-end
-
-module Mk_Mutations_Expr(O : Oracle.ORACLE) : MUTATIONS = struct
-    let all_mut () = 
-        let consts = Array.init (O.nconsts ()) (fun i -> OP_Const((O.consts ()).(i))) in
-        let vars = Array.init (O.nvars ()) (fun i -> OP_Var((O.vars ()).(i))) in
-        Array.concat [ consts ; vars; [|
-                OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+module Mk_Mutations_Expr(O : Oracle.ORACLE) : MUTATIONS = 
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -510,40 +630,58 @@ module Mk_Mutations_Expr(O : Oracle.ORACLE) : MUTATIONS = struct
 
                 OP_Triop(Div);
                 OP_Triop(SDiv)
-        |] ]
+        |] 
+    end) (O)
 
-    let unop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Unop(_) -> true
-            | _ -> false
-        ) l)
+module Mk_Mutations_Expr_ITE(O : Oracle.ORACLE) : MUTATIONS = 
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
-    let binop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Binop(_) -> true
-            | _ -> false
-        ) l)
+                OP_Unop(Minus);
+                OP_Unop(Not);
 
-    let triop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Triop(_) -> true
-            | _ -> false
-        ) l)
-end
+                OP_Binop(Add);
+                OP_Binop(Sub);
+                OP_Binop(Mul);
+                OP_Binop(And);
+                OP_Binop(Or);
+                OP_Binop(Xor);
 
-module Mk_Mutations_Full(O : Oracle.ORACLE) : MUTATIONS = struct
-    let all_mut () = 
-        let consts = Array.init (O.nconsts ()) (fun i -> OP_Const((O.consts ()).(i))) in
-        let vars = Array.init (O.nvars ()) (fun i -> OP_Var((O.vars ()).(i))) in
-        Array.concat [ consts ; vars; [|
-                OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+                OP_Triop(Div);
+                OP_Triop(SDiv);
+
+                OP_Triop(ITE)
+        |] 
+    end) (O)
+
+module Mk_Mutations_Expr_x86(O : Oracle.ORACLE) : MUTATIONS =
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            OP_Var(O.random_var ());
+            OP_Var(O.random_var ());
+
+            OP_Unop(Minus);
+            OP_Unop(Not);
+
+            OP_Binop(Add);
+            OP_Binop(Sub);
+            OP_Binop(Mul);
+            OP_Binop(And);
+            OP_Binop(Or);
+            OP_Binop(Xor);
+
+            OP_Binop(Div_x86);
+            OP_Binop(SDiv_x86);
+        |] 
+    end) (O)
+
+module Mk_Mutations_Full(O : Oracle.ORACLE) : MUTATIONS = 
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -562,41 +700,107 @@ module Mk_Mutations_Full(O : Oracle.ORACLE) : MUTATIONS = struct
                 OP_Triop(SDiv);
                 OP_Triop(Mod);
                 OP_Triop(SMod)
-        |] ]
+        |] 
+    end) (O)
 
-    let unop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Unop(_) -> true
-            | _ -> false
-        ) l)
+module Mk_Mutations_Full_x86(O : Oracle.ORACLE) : MUTATIONS = 
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            OP_Const(O.random_const ());
+                OP_Var(O.random_var ());
 
-    let binop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Binop(_) -> true
-            | _ -> false
-        ) l)
+                OP_Unop(Minus);
+                OP_Unop(Not);
 
-    let triop_mut () = 
-        let l = Array.to_list (all_mut ()) in
-        Array.of_list (List.filter (fun e -> 
-            match e with
-            | OP_Const(_) | OP_Var(_) | OP_Triop(_) -> true
-            | _ -> false
-        ) l)
-end
+                OP_Binop(Add);
+                OP_Binop(Sub);
+                OP_Binop(Mul);
+                OP_Binop(And);
+                OP_Binop(Or);
+                OP_Binop(Xor);
+
+                OP_Binop(RShiftu_x86);
+                OP_Binop(RShifts_x86);
+                OP_Binop(LShift_x86);
+
+                OP_Binop(Div_x86);
+                OP_Binop(SDiv_x86);
+                OP_Binop(Mod_x86);
+                OP_Binop(SMod_x86)
+        |] 
+    end) (O)
+
+    module Mk_Mutations_Sygus(O : Oracle.ORACLE) : MUTATIONS = 
+    Mk_Mutations(struct 
+        let spe_ops = [|
+            OP_Unop(Ehad);
+            OP_Unop(Arba);
+            OP_Unop(Shesh);
+            OP_Unop(Smol);
+            OP_Triop(Im);
+            
+            OP_Unop Not;
+
+            OP_Binop And;
+            OP_Binop Or;
+            OP_Binop Xor;
+            OP_Binop Add;
+        |]
+    end) (O)
 
 let mutations_of_str (module O: Oracle.ORACLE) str = match str with
 | "5" -> (module Mk_Mutations_Five (O) : MUTATIONS)
 | "mba" -> (module Mk_Mutations_Mba (O) : MUTATIONS)
 | "expr" -> (module Mk_Mutations_Expr (O) : MUTATIONS)
+| "expr_ite" -> (module Mk_Mutations_Expr_ITE (O) : MUTATIONS)
 | "mba_shift" -> (module Mk_Mutations_Mba_Shift (O) : MUTATIONS)
 | "mba_ite" -> (module Mk_Mutations_Mba_ITE (O) : MUTATIONS)
 | "full" -> (module Mk_Mutations_Full (O) : MUTATIONS)
+| "sygus" -> (module Mk_Mutations_Sygus (O) : MUTATIONS)
+| "expr_x86" -> (module Mk_Mutations_Expr_x86 (O) : MUTATIONS)
+| "full_x86" -> (module Mk_Mutations_Full_x86 (O) : MUTATIONS)
 | _ -> assert false
+
+(* Create the set of mutations from a user given list of operator's string representation *)
+let mutations_of_operators (module O: Oracle.ORACLE) arr = 
+    let muts = Array.map (fun s -> 
+        match s with
+        | "neg" -> OP_Unop(Minus)
+        | "not" -> OP_Unop(Not)
+        | "+" -> OP_Binop(Add)
+        | "-" -> OP_Binop(Sub)
+        | "*" -> OP_Binop(Mul)
+        | "&" -> OP_Binop(And)
+        | "|" -> OP_Binop(Or)
+        | "^" -> OP_Binop(Xor)
+        | ">>" -> OP_Binop(RShiftu)
+        | ">>s" -> OP_Binop(RShifts)
+        | "<<" -> OP_Binop(LShift)
+        | "ror" -> OP_Binop(RotateRight)
+        | "div_x86" -> OP_Binop(Div_x86)
+        | "sdiv_x86" -> OP_Binop(SDiv_x86)
+        | "mod_x86" -> OP_Binop(Mod_x86)
+        | "smod_x86" -> OP_Binop(SMod_x86)
+        | "rshiftu_x86" -> OP_Binop(RShiftu_x86)
+        | "lshift_x86" -> OP_Binop(LShift_x86)
+        | "rshifts_x86" -> OP_Binop(RShifts_x86)
+        | "/" -> OP_Triop(Div)
+        | "/s" -> OP_Triop(SDiv)
+        | "%" -> OP_Triop(Mod)
+        | "%s" -> OP_Triop(SMod)
+        | "ite" -> OP_Triop(ITE)
+        | "bswap" -> OP_Unop(Byteswap)
+        | "ehad" -> OP_Unop(Ehad)
+        | "arba" -> OP_Unop(Arba)
+        | "shesh" -> OP_Unop(Shesh)
+        | "smol" -> OP_Unop(Smol)
+        | "im" -> OP_Triop(Im)
+      
+        | _ -> failwith "Unknow operator") arr
+    in
+    (module (Mk_Mutations (struct 
+        let spe_ops = Array.append [| OP_Const(O.random_const ()); OP_Var(O.random_var ()) |] muts
+    end) (O)) : MUTATIONS)
 
 type node =
     | Var  of Oracle.variable
@@ -624,35 +828,22 @@ module type MUTATOR = sig
     val to_string : t -> string
     val to_smtlib : t -> string
     val simplify: t -> t
+    val get_expr_size : t -> int
+    val get_mutations : unit -> (module MUTATIONS)
+    val mk_var : Oracle.variable -> t
+    val mk_const_of_bv : Bitvector.t -> t
+    val mk_unop : unop_t -> t -> t
+    val mk_binop : binop_t -> t -> t -> t
+    val mk_triop : triop_t -> t -> t -> t -> t
 end
 
 module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
     module Unop = Mk_Unop(O)
     module Binop = Mk_Binop(O)
     module Triop = Mk_Triop(O)
+    include M
 
     exception NOCHOICE
-
-    let all_mut = M.all_mut
-    let unop_mut = M.unop_mut 
-    let binop_mut = M.binop_mut 
-    let triop_mut = M.triop_mut 
-
-    let map3 f x y z =
-        let lx = Array.length x in
-        let ly = Array.length y in
-        let lz = Array.length z in
-        if lx <> ly || lx <> lz then
-            assert false
-        else begin
-            if lx = 0 then [||] else begin
-                let r = Array.make lx (f (Array.get x 0) (Array.get y 0) (Array.get z 0)) in
-                for i = 1 to lx - 1 do
-                    Array.set r i (f (Array.get x i) (Array.get y i) (Array.get z i))
-                done;
-                r
-            end
-        end
 
     let mk_var var = {
         node = Var var ;
@@ -673,6 +864,9 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
         all_choices = all_mut (); 
         left_choices = all_mut (); 
     }
+
+    let mk_const_of_bv bv = 
+        mk_const (O.const_of_bitv bv)
     
     let mk_unop op t =
         let (sz, bitsz) =
@@ -704,7 +898,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
         node = Triop (op, t1, t2, t3) ;
         sz = 1 + t1.sz + t2.sz + t3.sz ; (* TODO Check *)
         bitsz = t1.bitsz ;
-        vals = map3 (fun x y z -> Triop.apply op x y z) t1.vals t2.vals t3.vals;
+        vals = Utility.map3 (fun x y z -> Triop.apply op x y z) t1.vals t2.vals t3.vals;
         last_mutation_indice = None;
         all_choices = triop_mut (); 
         left_choices = triop_mut ();
@@ -802,14 +996,14 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
         tree_equal t1' t2'
     | Binop(op1, t11', t12'), Binop(op2, t21', t22') when op1 = op2 -> 
         begin match op1 with
-        | Sub | LShift | RShifts | RShiftu ->
+        | Sub | LShift | RShifts | RShiftu | RotateRight ->
             (tree_equal t11' t21' && tree_equal t12' t22')
         | _ ->
             (tree_equal t11' t21' && tree_equal t12' t22') || (tree_equal t11' t22' && tree_equal t12' t21') 
         end
     | Triop(op1, t11', t12', t13'), Triop(op2, t21', t22', t23') when op1 = op2 -> 
         begin match op1 with
-        | Div | SDiv | Mod | SMod | ITE ->
+        | Div | SDiv | Mod | SMod | ITE | Im ->
             (tree_equal t11' t21' && tree_equal t12' t22' && tree_equal t13' t23')
         end
     | _, _ -> false
@@ -977,7 +1171,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                     in
                     recmutate t indice (max-1) new_allowed
         in
-        let allowed_nodes = Array.init t.sz (fun i -> i+1) in
+        let allowed_nodes = Array.init t.sz ((+) 1) in
         recmutate t indice t.sz allowed_nodes
 
     let cut t =
@@ -1017,7 +1211,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
         | Triop (op, t1, t2, t3) ->
                 begin match op with
                 | Div | SDiv | Mod | SMod -> sprintf "((%s ++ %s) %s %s)" (aux t1) (aux t2) (Triop.to_string op) (aux t3)
-                | ITE -> sprintf "%s(%s, %s, %s)" (Triop.to_string op) (aux t1) (aux t2) (aux t3)
+                | ITE | Im -> sprintf "%s(%s, %s, %s)" (Triop.to_string op) (aux t1) (aux t2) (aux t3)
                 end
         in
         aux t
@@ -1025,13 +1219,53 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
     let to_smtlib (t : t) =
         let open Printf in
         let rec aux t = match t.node with
-        | Var l -> sprintf "%s<%d>" l.name l.sz
+        | Var l -> l.name
         | Const c -> 
                 let hexstr = (Bitvector.to_hexstring c.value) in
                 sprintf "#x%s"  (String.sub hexstr 2 ((String.length hexstr) -2))
-        | Unop (op, t) -> sprintf "(%s %s)" (Unop.to_smtlib op) (aux t)
+        | Unop (op, t) -> 
+                begin match op with
+                | Extend sz -> sprintf "((_ zero_extend %d) %s)" (sz - t.bitsz) (aux t)
+                | Sextend sz -> sprintf "((_ sign_extend %d) %s)" (sz - t.bitsz) (aux t)
+                | Byteswap -> 
+                    let e = aux t in
+                    let sz = t.bitsz in
+                    let rec loop i =
+                        if i+8 == sz then
+                            sprintf "((_ extract %d %d) %s)" (i+8-1) i e
+                        else
+                            sprintf "(concat ((_ extract %d %d) %s) %s)" (i+8-1) i e (loop (i+8))
+                    in
+                    loop 0
+                | Ehad -> sprintf "(bvlshr %s %s)" (aux t) (cst_to_smtlib 1 t.bitsz)
+                | Arba -> sprintf "(bvlshr %s %s)" (aux t) (cst_to_smtlib 4 t.bitsz)
+                | Shesh -> sprintf "(bvlshr %s %s)" (aux t) (cst_to_smtlib 16 t.bitsz)
+                | Smol -> sprintf "(bvshl %s %s)" (aux t) (cst_to_smtlib 1 t.bitsz)
+                | _ -> sprintf "(%s %s)" (Unop.to_smtlib op) (aux t)
+                end
         | Binop (op, t1, t2) ->
-            sprintf "(%s %s %s)" (Binop.to_smtlib op) (aux t1) (aux t2)
+                let size = t1.bitsz in
+                begin match op with
+                | LShift_x86 | RShifts_x86 | RShiftu_x86 -> (
+                    match t1.bitsz with
+                    | 64 -> sprintf "(%s %s (bvand %s #x000000000000003f ))" (Binop.to_smtlib op) (aux t1) (aux t2)
+                    | 32 -> sprintf "(%s %s (bvand %s #x0000001f ))" (Binop.to_smtlib op) (aux t1) (aux t2)
+                    | 16 -> sprintf "(%s %s (bvand %s #x001f ))" (Binop.to_smtlib op) (aux t1) (aux t2)
+                    | 8 -> sprintf "(%s %s (bvand %s #x1f ))" (Binop.to_smtlib op) (aux t1) (aux t2)
+                    | _ -> failwith "Shift SMTLIB size not supported"
+                )
+                | Div_x86 | Mod_x86 ->
+                    sprintf "((_ extract %d 0) (%s ((_ zero_extend %d) %s) ((_ zero_extend %d) %s)))" (size-1) (Binop.to_smtlib op) (size) (aux t1) (size) (aux t2)    
+                | SDiv_x86 | SMod_x86 ->
+                    sprintf "((_ extract %d 0) (%s ((_ sign_extend %d) %s) ((_ sign_extend %d) %s)))" (size-1) (Binop.to_smtlib op) (size) (aux t1) (size) (aux t2) 
+                | RotateRight -> 
+                    let x = aux t1 in
+                    let ysize = cst_to_smtlib t2.bitsz t2.bitsz in
+                    let y = aux t2 in
+                    sprintf "(bvor (bvlshr %s %s) (bvshl %s (bvsub %s %s)))" x y x ysize y 
+                    (* sprintf "((_ %s (sbv_to_int %s)) %s)" (Binop.to_smtlib op) (aux t2) (aux t1)  *)
+                | _ -> sprintf "(%s %s %s)" (Binop.to_smtlib op) (aux t1) (aux t2)
+                end
         | Triop (op, t1, t2, t3) ->
                 let catsize = t1.bitsz + t2.bitsz in
                 let size = t3.bitsz in
@@ -1041,6 +1275,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                 | SDiv | SMod ->
                     sprintf "((_ extract %d 0) (%s (concat %s %s) ((_ sign_extend %d) %s)))" (size-1) (Triop.to_smtlib op) (aux t1) (aux t2) (catsize - size) (aux t3)
                 | ITE -> sprintf "(%s (distinct  %s (_ bv0 %d)) %s %s)" (Triop.to_smtlib op) (aux t1) t1.bitsz (aux t2) (aux t3)
+                | Im -> sprintf "(ite (= %s %s) %s %s)" (aux t1) (cst_to_smtlib 1 t1.bitsz) (aux t2) (aux t3)
                 end
         in
         aux t
@@ -1107,7 +1342,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
 
     let minus (x: Oracle.constant) = O.const_of_bitv (Unop.apply Minus x.value)
     let b_not (x: Oracle.constant) = O.const_of_bitv (Unop.apply Not x.value)
-
+    let bswap (x: Oracle.constant) = O.const_of_bitv (Unop.apply Byteswap x.value)
     let sum (x: Oracle.constant) (y: Oracle.constant) = O.const_of_bitv (Binop.apply Add x.value y.value)
     let sub (x: Oracle.constant) (y: Oracle.constant) = O.const_of_bitv (Binop.apply Sub x.value y.value)
     let mul (x: Oracle.constant) (y: Oracle.constant) = O.const_of_bitv (Binop.apply Mul x.value y.value)
@@ -1117,85 +1352,98 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
     let lshift (x: Oracle.constant) (y: Oracle.constant) = O.const_of_bitv (Binop.apply LShift x.value y.value)
     let rlshiftu (x: Oracle.constant) (y: Oracle.constant) = O.const_of_bitv (Binop.apply RShiftu x.value y.value)
     let rlshifts (x: Oracle.constant) (y: Oracle.constant) = O.const_of_bitv (Binop.apply RShifts x.value y.value)
+    let ror (x: Oracle.constant) (y: Oracle.constant) = O.const_of_bitv (Binop.apply RotateRight x.value y.value)
 
     let div (x: Oracle.constant) (y: Oracle.constant) (z: Oracle.constant) = O.const_of_bitv (Triop.apply Div x.value y.value z.value)
     let sdiv (x: Oracle.constant) (y: Oracle.constant) (z: Oracle.constant) = O.const_of_bitv (Triop.apply SDiv x.value y.value z.value)
     let umod (x: Oracle.constant) (y: Oracle.constant) (z: Oracle.constant) = O.const_of_bitv (Triop.apply Mod x.value y.value z.value)
     let smod (x: Oracle.constant) (y: Oracle.constant) (z: Oracle.constant) = O.const_of_bitv (Triop.apply SMod x.value y.value z.value)
+    let ite (x: Oracle.constant) (y: Oracle.constant) (z: Oracle.constant) = O.const_of_bitv (Triop.apply ITE x.value y.value z.value)
+    let im (x: Oracle.constant) (y: Oracle.constant) (z: Oracle.constant) = O.const_of_bitv (Triop.apply Im x.value y.value z.value)
 
+    (* @TODO: As the information inside the nodes are not used anymore,
+       we could transform the tree into a syntax tree (only operator and operand) without the 
+       type t record.
+       This would make this function much simpler and avoid reconstructing useless record each time we perform an
+       optimization 
+    *)
     let rec simplify tree =
-        let rec aux t = 
-            begin match t.node with
-            | Triop(ITE, t1, t2, t3) ->                                                                                                                                                                            
-                    begin match t1.node, t2.node, t3.node with
-                    | Const c, _, _ ->
-                            if Bitvector.is_zeros c.value then
-                                t3, true
-                            else
-                                t2, true               
-                    | Var v, _, _ ->
-                            let res2, modif2 = aux t2 in               
-                            let res3, modif3 = aux (setvar t3 v (O.const_of_int 0 t3.bitsz)) in          
-                            (mk_triop ITE t1 res2 res3, (modif2 || modif3))        
-                
-                    | _, _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            let res3, modif3 = aux t3 in
-                            (mk_triop ITE res1 res2 res3, (modif1 || modif2 || modif3))
-                    end
+        let triop_fct = function
+        | Div -> div
+        | SDiv -> sdiv
+        | Mod -> umod
+        | SMod -> smod
+        | ITE -> ite
+        | Im -> im
+        in
 
+        let rec default_triop ty t1 t2 t3 =
+            let res1, modif1 = aux t1 in
+            let res2, modif2 = aux t2 in
+            let res3, modif3 = aux t3 in
+            (mk_triop ty res1 res2 res3, (modif1 || modif2 || modif3))
+        
+        and default_binop ty t1 t2 =
+            let res1, modif1 = aux t1 in
+            let res2, modif2 = aux t2 in
+            (mk_binop ty res1 res2, (modif1 || modif2))
+        
+        and default_unop ty t1 =
+            let res1, modif1 = aux t1 in
+            (mk_unop ty res1, modif1)
+
+        and aux t = 
+            begin match t.node with
+
+            (* ITE optimizations *)
+            | Triop(ITE, { node = Const c; _ }, t2, t3) ->
+                if Bitvector.is_zeros c.value then t3,true else t2,true
+            | Triop(ITE, ({ node = Var v; _ } as t1), t2, t3) ->
+                let res2, modif2 = aux t2 in
+                let res3, modif3 = aux (setvar t3 v (O.const_of_int 0 t3.bitsz)) in
+                (mk_triop ITE t1 res2 res3, (modif2 || modif3))
+            | Triop(ITE, t1, t2, t3) -> default_triop ITE t1 t2 t3
+
+            (* Triop constant optimizations *)
+            | Triop (ty, {node = Const c1; _}, {node = Const c2; _}, {node = Const c3;_}) ->
+                (mk_const ((triop_fct ty) c1 c2 c3), true)
+
+            (* Div optimizations *)
             | Triop(Div, t1, t2, t3) -> 
                     begin match t1.node, t2.node, t3.node with
-                    | Const c1, Const c2, Const c3 -> 
-                            (mk_const (div c1 c2 c3), true)
                     | _, _, Const c when Bitvector.is_zeros c.value -> (mk_const (O.const_of_bitv (Bitvector.max_ubv (Bitvector.size_of c.value))), true)
                     | _, _, Const c when Bitvector.is_ones c.value -> 
                             (t2, true) (* only t2 because we reduce to size bits*)
-                    | _, _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            let res3, modif3 = aux t3 in
-                            (mk_triop Div res1 res2 res3, (modif1 || modif2 || modif3))
+                    | _, _, _ -> default_triop Div t1 t2 t3
                     end
-
+            (* SDiv optimizations *)
             | Triop(SDiv, t1, t2, t3) -> 
                     begin match t1.node, t2.node, t3.node with
-                    | Const c1, Const c2, Const c3 -> 
-                            (mk_const (sdiv c1 c2 c3), true)
                     | _, _, Const c when Bitvector.is_ones c.value -> 
                             (t2, true) (* only t2 because we reduce to size bits*)
-                    | _, _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            let res3, modif3 = aux t3 in
-                            (mk_triop SDiv res1 res2 res3, (modif1 || modif2 || modif3))
+                    | _, _, _ -> default_triop SDiv t1 t2 t3   
                     end
-
+            
+            (* Mod optimizations *)
             | Triop(Mod, t1, t2, t3) ->
                     begin match t1.node, t2.node, t3.node with
-                    | Const c1, Const c2, Const c3 ->
-                            (mk_const (umod c1 c2 c3), true)
                     | _, _, Const c when Bitvector.is_ones c.value -> (mk_const (O.const_of_int 0 (Bitvector.size_of c.value)), true)
                     | _, _, _ when (tree_equal t1 t2) && (tree_equal t1 t3) ->
                             (mk_const (O.const_of_int 0 (t1.bitsz)), true)
-                    | _, _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            let res3, modif3 = aux t3 in
-                            (mk_triop Mod res1 res2 res3, (modif1 || modif2 || modif3))
+                    | _, _, _ -> default_triop Mod t1 t2 t3
                     end
+            
+            (* SMod optimizations *)
             | Triop(SMod, t1, t2, t3) ->
                     begin match t1.node, t2.node, t3.node with
-                    | Const c1, Const c2, Const c3 ->
-                            (mk_const (smod c1 c2 c3), true)
                     | _, _, Const c when Bitvector.is_ones c.value -> (mk_const (O.const_of_int 0 (Bitvector.size_of c.value)), true)
-                    | _, _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            let res3, modif3 = aux t3 in
-                            (mk_triop SMod res1 res2 res3, (modif1 || modif2 || modif3))
+                    | _, _, _ -> default_triop SMod t1 t2 t3
                     end
+
+            (* Default case (for later)
+            | Triop(ty, t1, t2, t3) -> default_triop ty t1 t2 t3*)
+
+            (* Add optimizations *)
             | Binop(Add , t1, t2) -> 
                     begin match t1.node, t2.node with
                     | Const c1, Const c2 -> (mk_const (sum c1 c2), true)
@@ -1209,10 +1457,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                             | Const c1, Const c2 -> (mk_const (sum c2 (sum c1 c)), true)
                             | _ , Const c1 -> (mk_binop Add t1' (mk_const (sum c c1)), true)
                             | Const c1, _ -> (mk_binop Add t2' (mk_const (sum c c1)), true)
-                            | _ , _ ->
-                                    let res1, modif1 = aux t1 in
-                                    let res2, modif2 = aux t2 in
-                                    (mk_binop Add res1 res2, (modif1 || modif2))
+                            | _ , _ -> default_binop Add t1 t2
                             end
 
                     | Binop(Sub, t1', t2'), Const c
@@ -1221,10 +1466,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                             | Const c1, Const c2 -> (mk_const (sum (sub c1 c2) c), true)
                             | _ , Const c1 -> (mk_binop Add t1' (mk_const (sub c c1)), true)
                             | Const c1, _ -> (mk_binop Sub (mk_const (sum c c1)) t2', true)
-                            | _ , _ -> 
-                                    let res1, modif1 = aux t1 in
-                                    let res2, modif2 = aux t2 in
-                                    (mk_binop Add res1 res2, (modif1 || modif2))
+                            | _ , _ -> default_binop Add t1 t2
                             end
                     | Binop(Xor, t11', t12'), Binop(And, t21', t22') 
                             when (tree_equal t11' t21' && tree_equal t12' t22') || (tree_equal t11' t22' && tree_equal t12' t21') ->
@@ -1254,11 +1496,10 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                     | Unop(Not, t1'), Binop(Add, t21', t22') when tree_equal t1' t22' ->
                             mk_binop Sub t21' (mk_const (O.const_of_int 1 t21'.bitsz)) , true
                     | Var v1, Var v2 when v1 = v2 -> (mk_binop Mul (mk_const (O.const_of_int 2 v2.sz)) t1, true)
-                    | _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop Add res1 res2, (modif1 || modif2))
+                    | _, _ -> default_binop Add t1 t2
                     end
+
+            (* Mul optimizations *)
             | Binop(Mul , t1, t2) -> 
                     begin match t1.node, t2.node with
                     | Const c1, Const c2 -> (mk_const (mul c1 c2), true)
@@ -1280,19 +1521,15 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                             | Const c1, Const c2 -> (mk_const (mul c2 (mul c1 c)), true)
                             | _ , Const c1 -> (mk_binop Mul t1' (mk_const (mul c c1)), true)
                             | Const c1, _ -> (mk_binop Mul t2' (mk_const (mul c c1)), true)
-                            | _ , _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Mul res1 res2, (modif1 || modif2))
+                            | _ , _ -> default_binop Mul t1 t2
                             end
                     | Unop(Minus, t1'), Unop(Minus, t2') -> (mk_binop Mul t1' t2', true)
                     | Unop(Minus, t1'), _ -> (mk_unop Minus (mk_binop Mul t1' t2), true)
                     | _, Unop(Minus, t2') -> (mk_unop Minus (mk_binop Mul t1 t2'), true)
-                    | _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop Mul res1 res2, (modif1 || modif2))
+                    | _, _ -> default_binop Mul t1 t2
                     end
+
+            (* Sub optimizations *)
             | Binop(Sub , t1, t2) -> 
                     begin match t1.node, t2.node with
                     | _, _ when tree_equal t1 t2 -> (mk_const (O.const_of_int 0 t1.bitsz), true)
@@ -1306,40 +1543,28 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                             | Const c1, Const c2 -> (mk_const (sub (sub c1 c2) c), true)
                             | _ , Const c1 -> (mk_binop Sub t1' (mk_const (sum c c1)), true)
                             | Const c1, _ -> (mk_binop Sub (mk_const (sub c1 c)) t2', true)
-                            | _ , _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Sub res1 res2, (modif1 || modif2))
+                            | _ , _ -> default_binop Sub t1 t2
                             end
                     | Const c, Binop(Sub, t1', t2') ->
                             begin match t1'.node, t2'.node with
                             | Const c1, Const c2 -> (mk_const (sub c (sub c1 c2)), true)
                             | _ , Const c1 -> (mk_binop Sub (mk_const (sum c c1)) t1', true)
                             | Const c1, _ -> (mk_binop Add (mk_const (sub c c1)) t2', true)
-                            | _ , _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Sub res1 res2, (modif1 || modif2))
+                            | _ , _ -> default_binop Sub t1 t2
                             end
                     | Const c, Binop(Add, t1', t2') -> 
                             begin match t1'.node, t2'.node with
                             | Const c1, Const c2  -> (mk_const (sub c (sum c1 c2)), true) 
                             | Const c1, _ -> (mk_binop Sub (mk_const (sub c c1)) t2', true)
                             | _, Const c2 -> (mk_binop Sub (mk_const (sub c c2)) t1', true)
-                            | _, _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Sub res1 res2, (modif1 || modif2))
+                            | _, _ -> default_binop Sub t1 t2
                             end
                     | Binop(Add, t1', t2'), Const c -> 
                             begin match t1'.node, t2'.node with
                             | Const c1, Const c2  -> (mk_const (sub (sum c1 c2) c), true) 
                             | Const c1, _ -> (mk_binop Sub t2' (mk_const (sub c c1)), true)
                             | _, Const c2 -> (mk_binop Sub t1' (mk_const (sub c c2)), true)
-                            | _, _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Sub res1 res2, (modif1 || modif2))
+                            | _, _ -> default_binop Sub t1 t2
                             end
                     | Unop(Minus, t1'), Const c when Bitvector.is_ones c.value ->
                             mk_unop Not t1', true
@@ -1350,47 +1575,34 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                             (*
                              * if t1 = t2 then 0 else
                              *)
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop Sub res1 res2, (modif1 || modif2))
+                            default_binop Sub t1 t2
                     end
+            
+            (* LShift optimizations *)
+            | Binop(LShift, { node = Const c1; _ }, { node = Const c2; _ }) ->
+                (mk_const (lshift c1 c2), true)
+            (* RShiftu optimizations *)
+            | Binop(RShiftu, { node = Const c1; _ }, { node = Const c2; _ }) ->
+                (mk_const (rlshiftu c1 c2), true)
+            (* RShifts optimizations *)
+            | Binop(RShifts, { node = Const c1; _ }, { node = Const c2; _ }) ->
+                (mk_const (rlshifts c1 c2), true)
+            | Binop(RotateRight, { node = Const c1; _ }, { node = Const c2; _ }) ->
+                (mk_const (ror c1 c2), true)
+            
+            (* Generic Shift optimization (x shift 0 = x) *)
+            | Binop(LShift, t1, { node = Const c; _ })
+            | Binop(RShiftu, t1, { node = Const c; _ })
+            | Binop(RShifts, t1, { node = Const c; _ }) when Bitvector.is_zeros c.value ->
+                (t1, true)
+            
+            (* Default case (to merge with default binop) *)
+            | Binop(LShift as ty, t1, t2) 
+            | Binop(RShiftu as ty, t1, t2)
+            | Binop(RShifts as ty, t1, t2) -> 
+                default_binop ty t1 t2
 
-            | Binop(LShift, t1, t2) ->
-                    begin match t1.node, t2.node with
-                    | Const c1, Const c2 -> 
-                            (mk_const (lshift c1 c2), true)
-                    | _, Const c when Bitvector.is_zeros c.value ->
-                            (t1, true)
-                    | _, _ ->
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop LShift res1 res2, (modif1 || modif2))
-                    end
-
-            | Binop(RShiftu, t1, t2) ->
-                    begin match t1.node, t2.node with
-                    | Const c1, Const c2 -> 
-                            (mk_const (rlshiftu c1 c2), true)
-                    | _, Const c when Bitvector.is_zeros c.value ->
-                            (t1, true)
-                    | _, _ ->
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop RShiftu res1 res2, (modif1 || modif2))
-                    end
-
-            | Binop(RShifts, t1, t2) ->
-                    begin match t1.node, t2.node with
-                    | Const c1, Const c2 -> 
-                            (mk_const (rlshifts c1 c2), true)
-                    | _, Const c when Bitvector.is_zeros c.value ->
-                            (t1, true)
-                    | _, _ ->
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop RShifts res1 res2, (modif1 || modif2))
-                    end
-
+            (* And optimizations *)
             | Binop(And, t1, t2) ->
                     begin match t1.node, t2.node with
                     | _, _ when tree_equal t1 t2 -> (t1, true) 
@@ -1409,10 +1621,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                             | Const c1', Const c2' -> (mk_const (b_and c (b_and c1' c2')), true) 
                             | Const c', _ -> (mk_binop And t2' (mk_const (b_and c c')), true)
                             | _, Const c' -> (mk_binop And t1' (mk_const (b_and c c')), true)
-                            | _, _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop And res1 res2, (modif1 || modif2))
+                            | _, _ -> default_binop And t1 t2
                             end
                     | Const c, Binop(Mul, t21', t22') when Bitvector.is_ones c.value ->
                             begin match t21'.node, t22'.node with
@@ -1420,10 +1629,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                                     mk_const (O.const_of_int 0 (Bitvector.size_of c.value)), true
                             | _, Const c when not (Bitvector.get_bit c.value 0) -> (* if const is even *) 
                                     mk_const (O.const_of_int 0 (Bitvector.size_of c.value)), true
-                            | _, _ ->
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop And res1 res2, (modif1 || modif2))
+                            | _, _ -> default_binop And t1 t2
                             end
                     | Binop(Mul, t11', t12'), Const c when Bitvector.is_ones c.value ->
                             begin match t11'.node, t12'.node with
@@ -1431,10 +1637,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                                     mk_const (O.const_of_int 0 (Bitvector.size_of c.value)), true
                             | _, Const c when not (Bitvector.get_bit c.value 0) -> (* if const is even *) 
                                     mk_const (O.const_of_int 0 (Bitvector.size_of c.value)), true
-                            | _, _ ->
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop And res1 res2, (modif1 || modif2))
+                            | _, _ -> default_binop And t1 t2
                             end
                     | Binop(Xor, t11', t12'), Binop(And, t21', t22') 
                             when (tree_equal t11' t21' && tree_equal t12' t22') || (tree_equal t11' t22' && tree_equal t12' t21') ->
@@ -1450,18 +1653,12 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                     | Unop(Minus, t'), _ ->
                             begin match t'.node with
                             | Const c when Bitvector.is_ones c.value -> (t2, true)
-                            | _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop And res1 res2, (modif1 || modif2))
+                            | _ -> default_binop And t1 t2
                             end
                     | _ , Unop(Minus, t') ->
                             begin match t'.node with
                             | Const c when Bitvector.is_ones c.value -> (t1, true)
-                            | _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop And res1 res2, (modif1 || modif2))
+                            | _ -> default_binop And t1 t2
                             end
 
                     | Binop(And, t1', t2'), _ when tree_equal t1' t2 || tree_equal t2' t2 -> 
@@ -1489,17 +1686,12 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                                     (mk_const (O.const_of_int 0 t21''.bitsz), true)
                             | _, Unop(Not, t22'') when tree_equal t1 t22'' -> 
                                     (mk_const (O.const_of_int 0 t22''.bitsz), true)
-                            | _, _ ->
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop And res1 res2, (modif1 || modif2))
+                            | _, _ -> default_binop And t1 t2
                             end
-                    | _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop And res1 res2, (modif1 || modif2))
+                    | _, _ -> default_binop And t1 t2
                     end
-
+            
+            (* Or optimizations *)
             | Binop(Or, t1, t2) -> 
                     begin match t1.node, t2.node with
                     | _, _ when tree_equal t1 t2 -> (t1, true) 
@@ -1518,10 +1710,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                             | Const c1', Const c2' -> (mk_const (b_or c (b_or c1' c2')), true)
                             | Const c', _ -> (mk_binop Or t2' (mk_const (b_or c' c)), true)
                             | _, Const c' -> (mk_binop Or t1' (mk_const (b_or c' c)), true)
-                            | _, _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Or res1 res2, (modif1 || modif2))
+                            | _, _ -> default_binop Or t1 t2
                             end
                     | Binop(Xor, t1', t2'), _ when tree_equal t1' t2 || tree_equal t2' t2 ->
                             (mk_binop Or t1' t2', true)
@@ -1536,10 +1725,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                             begin match t'.node with
                             | Const c when Bitvector.is_ones c.value ->
                                 (mk_unop Minus (mk_const (O.const_of_int 1 (Bitvector.size_of c.value))), true)
-                            | _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Or res1 res2, (modif1 || modif2))
+                            | _ -> default_binop Or t1 t2
                             end
                     | Binop(And, t1', t2'), _ when tree_equal t1' t2 || tree_equal t2' t2 ->
                             (t2, true)
@@ -1563,12 +1749,10 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                                 (mk_unop Minus (mk_const (O.const_of_int 1 t11'.bitsz)), true)
                     | Unop(Not, t11'), Binop(Or, t21', t22') when tree_equal t11' t21' || tree_equal t11' t22' -> 
                                 (mk_unop Minus (mk_const (O.const_of_int 1 t11'.bitsz)), true)
-                    | _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop Or res1 res2, (modif1 || modif2))
+                    | _, _ -> default_binop Or t1 t2
                     end
-
+            
+            (* Xor optimizations *)
             | Binop(Xor, t1, t2) -> 
                     begin match t1.node, t2.node with
                     | _, _ when tree_equal t1 t2 -> (mk_const (O.const_of_int 0 t1.bitsz), true) 
@@ -1607,10 +1791,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                                             (mk_unop Minus (mk_const (O.const_of_int 2 (Bitvector.size_of c'.value))), true)
                                     | Const c', _ when Bitvector.get_bit c'.value 0 && (tree_equal ch2 t12') -> 
                                             (mk_unop Minus (mk_const (O.const_of_int 2 (Bitvector.size_of c'.value))), true)
-                                    | _, _ -> 
-                                        let res1, modif1 = aux t1 in
-                                        let res2, modif2 = aux t2 in
-                                        (mk_binop Xor res1 res2, (modif1 || modif2))
+                                    | _, _ -> default_binop Xor t1 t2
                                     end
 
                             | _, Const c, Binop(Or, ch1, ch2) when Bitvector.get_bit c.value 0 -> 
@@ -1619,40 +1800,27 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                                             (mk_unop Minus (mk_const (O.const_of_int 2 (Bitvector.size_of c'.value))), true)
                                     | Const c', _ when Bitvector.get_bit c'.value 0 && (tree_equal ch2 t11') -> 
                                             (mk_unop Minus (mk_const (O.const_of_int 2 (Bitvector.size_of c'.value))), true)
-                                    | _, _ -> 
-                                        let res1, modif1 = aux t1 in
-                                        let res2, modif2 = aux t2 in
-                                        (mk_binop Xor res1 res2, (modif1 || modif2))
+                                    | _, _ -> default_binop Xor t1 t2
                                     end
-                            | _, _, _ -> 
-                                    let res1, modif1 = aux t1 in 
-                                    let res2, modif2 = aux t2 in 
-                                    (mk_binop Xor res1 res2, (modif1 || modif2))
+                            | _, _, _ -> default_binop Xor t1 t2
                             end
 
                     | _ , Unop(Minus, t') ->
                             begin match t'.node with
                             | Const c when Bitvector.is_ones c.value ->
                                 (mk_unop Not t1, true)
-                            | _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Xor res1 res2, (modif1 || modif2))
+                            | _ -> default_binop Xor t1 t2
                             end
                     | Unop(Minus, t'), _  ->
                             begin match t'.node with
                             | Const c when Bitvector.is_ones c.value ->
                                 (mk_unop Not t2, true)
-                            | _ -> 
-                                let res1, modif1 = aux t1 in
-                                let res2, modif2 = aux t2 in
-                                (mk_binop Xor res1 res2, (modif1 || modif2))
+                            | _ -> default_binop Xor t1 t2
                             end
-                    | _, _ -> 
-                            let res1, modif1 = aux t1 in
-                            let res2, modif2 = aux t2 in
-                            (mk_binop Xor res1 res2, (modif1 || modif2))
+                    | _, _ -> default_binop Xor t1 t2
                     end
+            
+            (* Minus optimizations *)
             | Unop(Minus, t1) -> 
                     begin match t1.node with
                     | Const c -> (mk_const (minus c), true)
@@ -1663,22 +1831,24 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                                     mk_unop Not t1', true
                             | Const c, _ when Bitvector.is_ones c.value ->
                                     mk_unop Not t2', true
-                            | _, _ ->
-                                    let res1, modif1 = aux t1 in
-                                    mk_unop Minus res1, modif1
+                            | _, _ -> default_unop Minus t1
                             end
-                    | _ -> 
-                        let res1, modif1 = aux t1 in
-                        (mk_unop Minus res1, modif1)
+                    | _ -> default_unop Minus t1
                     end
+            (* Not optimizations *)
             | Unop(Not, t1) -> 
                     begin match t1.node with
                     | Const c -> (mk_const (b_not c), true)
                     | Unop(Not, t1') -> (t1', true)
-                    | _ -> 
-                        let res1, modif1 = aux t1 in
-                        (mk_unop Not res1, modif1)
+                    | _ -> default_unop Not t1
                     end
+            (* Byteswap optimization *)
+            | Unop(Byteswap, t1) ->
+                begin match t1.node with
+                | Const c -> (mk_const (bswap c), true)
+                | Unop(Byteswap, t1') -> (t1', true)
+                | _ -> default_unop Byteswap t1
+                end
             | _ -> (t, false)
             end
         in
@@ -1686,6 +1856,7 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
         | tree, true -> simplify tree
         | tree, false -> tree
         end
-
-        
+    
+    let get_expr_size t = t.sz
+    let get_mutations () = (module M : MUTATIONS)
 end

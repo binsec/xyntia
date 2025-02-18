@@ -1,3 +1,5 @@
 (tests 
     (names heuristic_test bitvector_test) 
-    (libraries utils ounit2 qcheck))
+    (libraries xyntia_utils ounit2 qcheck binsec)
+    (flags (:standard -open Binsec))
+)
