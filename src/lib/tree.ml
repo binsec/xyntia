@@ -19,6 +19,8 @@
 (*                                                                        *)
 (**************************************************************************)
 
+open Utility
+
 let select omega =
     omega.(Random.int (Array.length omega))
 
@@ -36,6 +38,8 @@ module type UNOP = sig
     include XOP with type t := unop_t
     val apply : unop_t -> Bitvector.t -> Bitvector.t
     val is_sz_modifier : unop_t -> bool
+
+    val to_sygus : unop_t -> string -> int -> string
 end
 
 module Mk_Unop (Oracle : Oracle.ORACLE) : UNOP = struct
@@ -109,6 +113,25 @@ module Mk_Unop (Oracle : Oracle.ORACLE) : UNOP = struct
     | Arba -> "arba"
     | Shesh -> "shesh"
     | Smol -> "smol"
+
+    let to_sygus op term1 sz1 = match op with
+    | Minus -> Format.sprintf "(bvneg %s)" term1
+    | Not -> Format.sprintf "(bvnot %s)" term1
+    | Extend sz -> Printf.sprintf "((_ zero_extend %d) %s)" (sz - sz1) term1
+    | Sextend sz -> Printf.sprintf "((_ sign_extend %d) %s)" (sz - sz1) term1
+    | Reduce sz -> Printf.sprintf "(_ extract %d 0)" (sz-1)
+    | Byteswap -> 
+        let rec loop i =
+            if i+8 == sz1 then
+                Format.sprintf "((_ extract %d %d) %s)" (i+8-1) i term1
+            else
+                Format.sprintf "(concat ((_ extract %d %d) %s) %s)" (i+8-1) i term1 (loop (i+8))
+        in
+        loop 0
+    | Ehad -> Format.sprintf "(bvlshr %s %s)" term1 (cst_to_smtlib 1 sz1)
+    | Arba -> Format.sprintf "(bvlshr %s %s)" term1 (cst_to_smtlib 4 sz1)
+    | Shesh -> Format.sprintf "(bvlshr %s %s)" term1 (cst_to_smtlib 16 sz1)
+    | Smol -> Format.sprintf "(bvshl %s %s)" term1 (cst_to_smtlib 1 sz1)
 end
 
 type binop_t = Add | Sub | Mul | And | Or | Xor | RShiftu | LShift | RShifts | RotateRight
@@ -116,6 +139,7 @@ type binop_t = Add | Sub | Mul | And | Or | Xor | RShiftu | LShift | RShifts | R
 module type BINOP = sig
     include XOP with type t := binop_t
     val apply : binop_t -> Bitvector.t -> Bitvector.t -> Bitvector.t
+    val to_sygus : binop_t -> string -> int -> string -> int -> string
 end
 
 module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
@@ -178,6 +202,18 @@ module Mk_Binop(Oracle : Oracle.ORACLE) : BINOP = struct
     | RShifts -> "bvashr"
     | RotateRight -> "rotate_right"
 
+    let to_sygus op term1 _sz1 term2 _sz2 = match op with
+    | Add -> Format.sprintf "(bvadd %s %s)" term1 term2
+    | Sub -> Format.sprintf "(bvsub %s %s)" term1 term2
+    | Mul -> Format.sprintf "(bvmul %s %s)" term1 term2
+    | And -> Format.sprintf "(bvand %s %s)" term1 term2
+    | Or  -> Format.sprintf "(bvor %s %s)" term1 term2
+    | Xor -> Format.sprintf "(bvxor %s %s)" term1 term2
+    | RShiftu -> Format.sprintf "(bvlshr %s %s)" term1 term2
+    | LShift -> Format.sprintf "(bvshl %s %s)" term1 term2
+    | RShifts -> Format.sprintf "(bvashr %s %s)" term1 term2
+    | RotateRight -> Format.sprintf "((_ rotate_right %s) %s)" term1 term2
+
     let rand () = select omega
     let cardinal () = Array.length omega
 
@@ -217,6 +253,7 @@ type triop_t = Div | SDiv | Mod | SMod | ITE | Im
 module type TRIOP = sig
     include XOP with type t := triop_t
     val apply : triop_t -> Bitvector.t -> Bitvector.t -> Bitvector.t -> Bitvector.t
+    val to_sygus : triop_t -> string -> int -> string -> int -> string -> int -> string
 end
 
 module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
@@ -260,6 +297,17 @@ module Mk_Triop(Oracle : Oracle.ORACLE) : TRIOP = struct
     | SMod -> "bvsrem"
     | ITE -> "ite"
     | Im -> "im"
+
+    let to_sygus op term1 sz1 term2 sz2 term3 sz3 = 
+    let catsize = sz1 + sz2 in
+    let size = sz3 in
+    match op with
+    | Div -> Format.sprintf "((_ extract %d 0) (bvudiv (concat %s %s) ((_ zero_extend %d) %s)))" (size-1) term1 term2 (catsize - size) term3
+    | SDiv -> Format.sprintf "((_ extract %d 0) (bvsdiv (concat %s %s) ((_ sign_extend %d) %s)))" (size-1) term1 term2 (catsize - size) term3
+    | Mod -> Format.sprintf "((_ extract %d 0) (bvurem (concat %s %s) ((_ zero_extend %d) %s)))" (size-1) term1 term2 (catsize - size) term3
+    | SMod -> Format.sprintf "((_ extract %d 0) (bvsrem (concat %s %s) ((_ sign_extend %d) %s)))" (size-1) term1 term2 (catsize - size) term3
+    | ITE -> Format.sprintf "(ite (distinct  %s (_ bv0 %d)) %s %s)" term1 sz1 term2 term3
+    | Im -> Format.sprintf "(ite (= %s %s) %s %s)" term1 (cst_to_smtlib 1 sz1) term2 term3
 
     let rand () = select omega
 
@@ -322,9 +370,16 @@ module type MUTATIONS = sig
     val unop_mut : unit -> op_t array
     val binop_mut : unit -> op_t array
     val triop_mut : unit -> op_t array
+    val unop_sygus : op_t -> string -> int -> string
+    val binop_sygus : op_t -> string -> int -> string -> int -> string
+    val triop_sygus : op_t -> string -> int -> string -> int -> string -> int -> string
 end
 
 module Mk_Mutations(M: MUTATION_BASE) (O : Oracle.ORACLE) : MUTATIONS = struct 
+    module Unop = Mk_Unop (O) 
+    module Binop = Mk_Binop (O) 
+    module Triop = Mk_Triop (O) 
+
     let all_mut () = 
         let consts = Array.map (fun x -> OP_Const x) (O.consts ()) in
         let vars = Array.map (fun x -> OP_Var x) (O.vars ()) in
@@ -350,13 +405,34 @@ module Mk_Mutations(M: MUTATION_BASE) (O : Oracle.ORACLE) : MUTATIONS = struct
             | OP_Const(_) | OP_Var(_) | OP_Triop(_) -> true
             | _ -> false)
         |> Array.of_list
+    
+    let unop_sygus op nonterm1 sz1 = match op with
+    | OP_Const(c) -> 
+        let z = Bitvector.signed_of c.value in
+        let bv = Bitvector.create z sz1 in
+        bv_to_smtlib bv
+    | OP_Var(v) -> if v.sz == sz1 then v.name else ""
+    | OP_Unop(unop) -> Unop.to_sygus unop nonterm1 sz1
+    | _ -> failwith "not a unop"  
+
+    let binop_sygus op nonterm1 sz1 nonterm2 sz2 = match op with
+    | OP_Const(_) -> ""
+    | OP_Var(_) -> ""
+    | OP_Binop(binop) -> Binop.to_sygus binop nonterm1 sz1 nonterm2 sz2
+    | _ -> failwith "not a binop" 
+    
+    let triop_sygus op nonterm1 sz1 nonterm2 sz2 nonterm3 sz3 = match op with
+    | OP_Const(_) -> ""
+    | OP_Var(_) -> ""
+    | OP_Triop(triop) -> Triop.to_sygus triop nonterm1 sz1 nonterm2 sz2 nonterm3 sz3
+    | _ -> failwith "not a triop" 
 end
 
 module Mk_Mutations_Five(O : Oracle.ORACLE) : MUTATIONS = 
     Mk_Mutations(struct 
         let spe_ops = [|
-            OP_Const(O.random_const ());
-            OP_Var(O.random_var ());
+            (* OP_Const(O.random_const ());
+            OP_Var(O.random_var ()); *)
 
             OP_Unop(Minus);
             OP_Unop(Not);
@@ -370,8 +446,8 @@ module Mk_Mutations_Five(O : Oracle.ORACLE) : MUTATIONS =
 module Mk_Mutations_Mba(O : Oracle.ORACLE) : MUTATIONS = 
     Mk_Mutations(struct 
         let spe_ops = [|
-            OP_Const(O.random_const ());
-            OP_Var(O.random_var ());
+            (* OP_Const(O.random_const ());
+            OP_Var(O.random_var ()); *)
 
             OP_Unop(Minus);
             OP_Unop(Not);
@@ -388,8 +464,8 @@ module Mk_Mutations_Mba(O : Oracle.ORACLE) : MUTATIONS =
 module Mk_Mutations_Mba_Shift(O : Oracle.ORACLE) : MUTATIONS =
     Mk_Mutations(struct 
         let spe_ops = [|
-            OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -409,8 +485,8 @@ module Mk_Mutations_Mba_Shift(O : Oracle.ORACLE) : MUTATIONS =
 module Mk_Mutations_Mba_ITE(O : Oracle.ORACLE) : MUTATIONS = 
     Mk_Mutations(struct 
         let spe_ops = [|
-            OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -429,8 +505,8 @@ module Mk_Mutations_Mba_ITE(O : Oracle.ORACLE) : MUTATIONS =
 module Mk_Mutations_Expr(O : Oracle.ORACLE) : MUTATIONS = 
     Mk_Mutations(struct 
         let spe_ops = [|
-            OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -450,8 +526,8 @@ module Mk_Mutations_Expr(O : Oracle.ORACLE) : MUTATIONS =
 module Mk_Mutations_Expr_ITE(O : Oracle.ORACLE) : MUTATIONS = 
     Mk_Mutations(struct 
         let spe_ops = [|
-            OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -473,8 +549,8 @@ module Mk_Mutations_Expr_ITE(O : Oracle.ORACLE) : MUTATIONS =
 module Mk_Mutations_Full(O : Oracle.ORACLE) : MUTATIONS = 
     Mk_Mutations(struct 
         let spe_ops = [|
-            OP_Const(O.random_const ());
-                OP_Var(O.random_var ());
+            (* OP_Const(O.random_const ());
+                OP_Var(O.random_var ()); *)
 
                 OP_Unop(Minus);
                 OP_Unop(Not);
@@ -970,11 +1046,6 @@ module Mk_Mutator(O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
                 end
         in
         aux t
-
-    let cst_to_smtlib cst size = 
-        let bv = Bitvector.of_int ~size cst in
-        let s = Bitvector.to_hexstring bv in
-        String.mapi (fun i c -> if i = 0 then '#' else c) s
 
     let to_smtlib (t : t) =
         let open Printf in

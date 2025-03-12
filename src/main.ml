@@ -50,6 +50,7 @@ type args_t = {
     mutable isa : string option;
     mutable sample_out : string option;
     mutable sample_only : bool;
+    mutable sygus : bool;
 }
 
 let n_cegis_loop = ref 1
@@ -168,6 +169,7 @@ let parse_args () =
         isa = None;
         sample_out = None;
         sample_only = false;
+        sygus = false;
     }
     in
     let open Arg in
@@ -264,6 +266,11 @@ let parse_args () =
             "\toutput directory to put the samples"
         );
         (
+            "-sygus",
+            Unit (fun () -> args.sygus <- true),
+            "\treturn the sygus problem (to call other synthesizers)"
+        );
+        (
             "-seed",
             Int (fun t -> args.seed <- Some t),
             "\tProvides a seed for the random generator"
@@ -297,12 +304,39 @@ Usage:
 Options:";
         args
 
-let run_task args samplefile formula = 
+
+let get_oracle args samplefile = 
     let csts : int array = Array.init 
         (args.max_const - args.min_const) 
         (fun v -> v + args.min_const)  
     in
-    let oracle = Oracle.of_json ~filename:samplefile csts in
+    Oracle.of_json ~filename:samplefile csts
+
+let get_mutations args (module O : Oracle.ORACLE) = match args.ops with
+        | "mba" | "expr" | "full" | "5" | "mba_shift" | "mba_ite" | "sygus" | "expr_ite" -> Tree.mutations_of_str (module O: Oracle.ORACLE) args.ops
+        | _ -> 
+            let l = String.split_on_char ',' args.ops in
+            let arr = Array.init (List.length l) (fun i -> String.trim (List.nth l i)) in
+            Tree.mutations_of_operators (module O: Oracle.ORACLE) arr
+
+let get_sygus args samplefile = 
+    let oracle = get_oracle args samplefile in
+    let module O = (val oracle : Oracle.ORACLE) in
+    let (module MU : Tree.MUTATIONS) = get_mutations args (module O: Oracle.ORACLE) in
+    let module SyGus = Sygus.SyGusPrinter (O) (MU) in
+    match args.sample_out with
+    | Some odir  -> 
+        let outname = Filename.basename samplefile |> Filename.remove_extension in 
+        let outfilename = odir ^ "/" ^ outname ^ ".sl" in
+        let oc = open_out outfilename in
+        Printf.fprintf oc "%s\n" (SyGus.print ());
+        close_out oc
+    | None -> 
+        Printf.printf "%s\n" (SyGus.print ());
+        Format.print_flush ()
+
+let run_task args samplefile formula = 
+    let oracle = get_oracle args samplefile in
     let module O = (val oracle : Oracle.ORACLE) in
 
     let distance : (module Distance.DIST) = 
@@ -315,15 +349,7 @@ let run_task args samplefile formula =
         | _ -> failwith (Printf.sprintf "Unknown heurisitic: %s" args.dist) 
     in
     
-    let (module MU : Tree.MUTATIONS) = 
-        match args.ops with
-        | "mba" | "expr" | "full" | "5" | "mba_shift" | "mba_ite" | "sygus" | "expr_ite" -> Tree.mutations_of_str (module O: Oracle.ORACLE) args.ops
-        | _ -> 
-            let l = String.split_on_char ',' args.ops in
-            let arr = Array.init (List.length l) (fun i -> String.trim (List.nth l i)) in
-            Tree.mutations_of_operators (module O: Oracle.ORACLE) arr
-    in
-
+    let (module MU : Tree.MUTATIONS) = get_mutations args (module O: Oracle.ORACLE) in
     let module M = Tree.Mk_Mutator (O) (MU) in 
     
     let (module D : Distance.VECDIST) = 
@@ -459,6 +485,11 @@ let () =
     | _, _ -> failwith "-bin and -config must be set together"
     in
 
+    if args.sygus then (
+        List.iter (fun sample -> get_sygus args sample) samples;
+        exit 0
+    );
+    
     if args.sample_only then
         exit 0;
 

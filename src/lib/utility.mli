@@ -27,3 +27,7 @@ val map3 :
 
 (* Computes the minimum element of the list, returning the Some (element, cost) if it exists and None else *)
 val min_list : ('a -> 'b) -> 'a list -> ('a * 'b) option
+
+val bv_to_smtlib : Bitvector.t -> string
+
+val cst_to_smtlib : int -> int -> string

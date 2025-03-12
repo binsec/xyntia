@@ -30,6 +30,9 @@ module type MUTATIONS = sig
     val unop_mut : unit -> op_t array
     val binop_mut : unit -> op_t array
     val triop_mut : unit -> op_t array
+    val unop_sygus : op_t -> string -> int -> string
+    val binop_sygus : op_t -> string -> int -> string -> int -> string
+    val triop_sygus : op_t -> string -> int -> string -> int -> string -> int -> string
 end
 
 

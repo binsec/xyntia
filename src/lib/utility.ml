@@ -46,3 +46,12 @@ let min_list f l =
         if vx <= vy then Some (x, vx) else Some (y, vy)
   in
   List.fold_left foldf None l
+
+  let bv_to_smtlib bv = 
+    let s = Bitvector.to_hexstring bv in
+    String.mapi (fun i c -> if i = 0 then '#' else c) s
+
+  let cst_to_smtlib cst size = 
+    let bv = Bitvector.of_int ~size cst in
+    bv_to_smtlib bv
+
