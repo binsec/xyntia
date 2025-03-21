@@ -517,11 +517,12 @@ let () =
                                 ) in 
                                 toadd::acc
                             ) [] outsinfos in
-                     let _, _, _, _, _, exprsize = List.hd outsinfos in 
+                     let _, _, expr, _, _, exprsize = List.hd outsinfos in 
                      `Assoc [ 
                          ("initial", snd (List.hd samp)); 
                          ("sampling", `Assoc samp) ; 
-                         ("info"), `Assoc [ "exprsize", `Int (Option.get exprsize) ]
+                         ("info"), `Assoc [ ("exprsize", `Int (Option.get exprsize)); ("binsec_formula", `String (Format.asprintf "%a" Term.pp expr)) ]
+
                       ]
 
                       let bv_to_smtstr bv = 
