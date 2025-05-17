@@ -1,9 +1,13 @@
 (executable
-        (public_name xyntia)
-        (package xyntia)
-	(name main)
-	(libraries unix xyntia_utils binsec binsec.smt 
-        binsec.armv7decoder
-        binsec.amd64decoder
-        binsec.armv8decoder
-        binsec.ppc64decoder))
+ (public_name xyntia)
+ (package xyntia)
+ (name main)
+ (libraries
+  unix
+  xyntia_utils
+  binsec
+  binsec.smt
+  binsec.armv7decoder
+  binsec.amd64decoder
+  binsec.armv8decoder
+  binsec.ppc64decoder))

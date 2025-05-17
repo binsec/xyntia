@@ -1,5 +1,7 @@
+(include_subdirs unqualified)
+
 (library
-        (package xyntia)
-	(name xyntia_utils)
-	(libraries yojson binsec binsec.smt binsec.sse xyntiasampler fileutils)
-)
+ (package xyntia)
+ (name xyntia_utils)
+ (preprocess (pps ppx_deriving.eq ppx_deriving.enum ppx_deriving.ord))
+ (libraries yojson binsec binsec.smt binsec.sse xyntiasampler fileutils))

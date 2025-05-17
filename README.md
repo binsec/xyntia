@@ -1,20 +1,22 @@
 
 # Table of Contents
 
-1.  [Requirements](#requirements)
-2.  [Installation](#installation)
-3.  [Usage](#usage)
+1.  [Installation](#installation)
+2.  [Usage](#usage)
     1.  [Synthesizing functions from sampling files](#synthesizing-functions-from-sampling-files)
     2.  [Synthesizing functions from a binary](#synthesizing-functions-from-a-binary)
     3.  [Grammar abbreviations](#grammar-abbreviations)
     4.  [Heuristic abbreviations](#heuristic-abbreviations)
-    5.  [Generating SyGUS problems](#generating-sygus-problems)
-4.  [Experiments](#experiments)
-5.  [Synthesize all blocks from a execution trace](#synthesize-all-blocks-from-a-execution-trace)
-7.  [References](#references)
+    5.  [Inference rules](#inference-rules)
+    6.  [Generating SyGUS problems](#generating-sygus-problems)
+3.  [Experiments](#experiments)
+4.  [Synthesize all blocks from a execution trace](#synthesize-all-blocks-from-a-execution-trace)
+5.  [References](#references)
 
 
-# Requirements
+# Installation
+
+<details open><summary>Show</summary>
 
 ## System requirements
 
@@ -28,8 +30,8 @@ You must also install [Ghidra](https://ghidra-sre.org/) and add the GHIDRA envir
 export GHIDRA=<ghidra-directory>
 ```
 
-
 # Installation
+
 
 The easiest way to install xyntia is to create an opam switch. It will automatically install xyntia and its dependencies:
 ```
@@ -37,12 +39,16 @@ $ cd <xyntia-directory>
 $ opam switch create . 4.14.1 -y # or any version >= 4.14.1
 $ eval $(opam env)
 ```
+</details>
 
 # Usage
 
 The help of xyntia is available through `xyntia -help`. In the following we will explain the two ways for using xyntia. 
 
 ## Synthesizing functions from sampling files
+
+<details open><summary>Show</summary>
+
 
 To synthesize a function from a sampling file, execute the following command:
 
@@ -53,7 +59,12 @@ where *grammar* is the abbreviation of the grammar used to define the search spa
 
 The sampling file should be in the format produced by Syntia's random sampling module. The file `examples/samples/example.json` is an example of a sampling file.
 
+</details>
+
 ## Synthesizing functions from a binary
+
+<details open><summary>Show</summary>
+
 
 You can let xyntia sample the output from a binary and synthesize them with the 
 following command:
@@ -64,7 +75,7 @@ where *binary-file* is the path to the binary to analyze and *config-file* is a 
 
 The scripting language used in *config-file* is an extension of the [Binsec scripting language](https://github.com/binsec/binsec/blob/master/doc/sse/references.md). It adds the following new declarations and instructions:
 * `sample N [ reg_1, ..., reg_n ]`, which specify to generate N samples for each output. A list of target register outputs can be set, in such a case, only these are sampled otherwise all detected outputs are;
-* `set domain VAR [MIN, MAX]` which specify the sampling domain for the VAR  input. VAR can be a register or any DBA variable but not a memory cell. To specify the domain of a memory cell, see [this example](sampler/examples/snapshat.ini);
+* `set domain VAR [MIN, MAX]` which specify the sampling domain for the VAR  input. VAR can be a register or any DBA variable but not a memory cell. To specify the domain of a memory cell, see [this example](sampler/examples/snapchat.ini);
 * `prune constant outputs` which prunes all the constant outputs (i.e., with no input variables) from the set of sampled outputs;
 * `set optimal sampling` to use the sampling strategy depicted in the Xyntia paper.
 
@@ -102,8 +113,12 @@ It is also possible to sample a symbolic expression directly. An example is give
 xyntia -bin <() -config sampler/examples/expr.ini
 ```
 
+</details>
 
 ## Grammar abbreviations
+
+<details open><summary>Show</summary>
+
 
 <table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
 
@@ -152,7 +167,11 @@ xyntia -bin <() -config sampler/examples/expr.ini
 </tbody>
 </table>
 
+</details>
+
 ## Heuristic abbreviations
+
+<details open><summary>Show</summary>
 
 <table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
 
@@ -201,7 +220,57 @@ xyntia -bin <() -config sampler/examples/expr.ini
 </tbody>
 </table>
 
+</details>
+
+## Inference rules
+
+<details open><summary>Show</summary>
+
+
+### When to use Inference Rules ?
+
+
+**In Short:** If you expect your target expression to contain constant values.
+
+**Full answer:** Program synthesis has core limitations, namely the handling of arbitrary constant values and big expressions. To bypass these limitations Xyntia includes *Inference Rules* to better guide the search and elevate in one step a candidate solutions into the target expression (possibly with arbitrary constant values). 
+Hence if your target expression is likely to contain constant values use the inference rules.
+
+To better understand, read our paper [3]:
+> **Augmenting Search-based Program Synthesis with Local Inference Rules to Improve Black-box Deobfuscation**, Vidal Attias, Nicolas Bellec, Grégoire Menguy, Sébastien Bardin, Jean-Yves Marion, ACM Conference on Computer and Communications Security 2025
+
+
+### Usage 
+
+To use inference rules you must set the option 
+`-infrules <val>` where `<val>` can be:
+1. A list of rules (`r1, r2, ..., rk`) where each rules aim to handle a specific case as described below
+
+| Inference Rule                             | Expression kind                 |
+|--------------------------------------------|---------------------------------|
+| $\diamond \in \{ +, *, \oplus, >>u, <<, ror \}$ | $e \diamond c$                  |
+| maskotf                                    | $(e \land c_1) \lor c_2$        |
+| affine                                     | $(c_1 * e) + c_2$               |
+| poly2                                      | $(c_1 * e^2) + (c_2 * e) + c_3$ |
+
+> where `e` is a expression from the grammar and `c, c1, c2, c3` are arbitrary constant values.
+
+
+
+2. A keyword among `mba` (same as: `+, maskotf, <<, *, ^`) and `all` (same as: `+, maskotf, <<, >>u, *, ^, ror, poly2, affine`).
+
+
+### You want to try it ? 
+
+We provide an example of obfuscated expression from the snapchat app. To apply Xyntia over it, run:
+```
+$ xyntia -bin samplers/examples/snapchat -config samplers/examples/snapchat.ini -infrules all 
+```
+
+</details>
+
 ## Generating SyGUS problems
+
+<details open><summary>Show</summary>
 
 To easily compare other synthesizers with Xyntia or apply them to deobfuscation tasks, we provide a way to extract the 
 the synthesis problem in the standard SyGUS format. To do so, just use the `-sygus` option.
@@ -211,7 +280,12 @@ For instance, to extract the sygus problem from a binary code, run:
 $ xyntia -bin <binary-file> -config <config-file> -sygus
 ```
 
+</details>
+
 # Experiments
+
+<details open><summary>Show</summary>
+
 
 All datasets and scripts are given to reproduce expriments presented in [1]. Especially, it contains the B1 dataset from the [Syntia](https://github.com/RUB-SysSec/syntia) paper [2] 
 (Thank you [Tim Blazytko](https://synthesis.to/) for sharing it with us), our B2 dataset and the datasets used to evaluate anti-black-box deobfuscation.
@@ -243,7 +317,12 @@ $ python3 ./scripts/bench/bench.py --dataset datasets/b2 --out results --paralle
 The option and their meanings can be found through the `--help` option.
 
 
+</details>
+
 # Synthesize all blocks from a execution trace
+
+<details open><summary>Show</summary>
+
 
 We also give `./scripts/utils/all_from_trace.sh` which traces code execution with Ghidra or GDB, extracts each code block executed, samples and synthesizes them.
 The manual is available through `./scripts/utils/all_from_trace.sh --help` and it can be run as follows: 
@@ -260,8 +339,12 @@ $ cd examples/bin && make && cd -
 $ ./scripts/utils/all_from_trace.sh --outdir <resdir> --all -- ./examples/bin/add
 ```
 
+</details>
+
 # References
 
-[1] Menguy, G., Bardin, S., Bonichon, R., & Lima, C. D. S. (2021, November). Search-Based Local Black-Box Deobfuscation: Understand, Improve and Mitigate. In Proceedings of the 2021 ACM SIGSAC Conference on Computer and Communications Security (pp. 2513-2525).
+[1] Menguy, G., Bardin, S., Bonichon, R., & Lima, C. D. S. (2021, November). Search-Based Local Black-Box Deobfuscation: Understand, Improve and Mitigate. In Proceedings of the 2021 ACM SIGSAC Conference on Computer and Communications Security.
 
-[2] Blazytko, T., Contag, M., Aschermann, C., & Holz, T. (2017). Syntia: Synthesizing the semantics of obfuscated code. In 26th USENIX Security Symposium (USENIX Security 17) (pp. 643-659).
+[2] Blazytko, T., Contag, M., Aschermann, C., & Holz, T. (2017). Syntia: Synthesizing the semantics of obfuscated code. In 26th USENIX Security Symposium (USENIX Security 17).
+
+[3] Attias, V., Bellec, N., Menguy, G., Bardin, S., Marion, J. (2025, October). Augmenting Search-based Program Synthesis with Local Inference Rules to Improve Black-box Deobfuscation. In Proceedings of the 2025 ACM SIGSAC Conference on Computer and Communications Security.

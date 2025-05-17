@@ -23,7 +23,7 @@ include Binsec.Bitvector
 
 let is_even x = not (get_bit x 0)
 
-let mod_inverse x = 
+let mod_inverse x =
   let f8bits x =
     let onee = of_int ~size:8 1 in
     let twoo = of_int ~size:8 2 in
@@ -35,12 +35,8 @@ let mod_inverse x =
 
     let x1 = add onee y in
     let x1 = mul x0 x1 in
-    if equal (mul x1 x) onee then
-      x1
-    else
-      assert false
+    if equal (mul x1 x) onee then x1 else assert false
   in
-
 
   let f16bits x =
     let onee = of_int ~size:16 1 in
@@ -55,10 +51,7 @@ let mod_inverse x =
     let y = mul y y in
     let x2 = add onee y in
     let x2 = mul x1 x2 in
-    if equal (mul x2 x) onee then
-      x2
-    else
-      assert false
+    if equal (mul x2 x) onee then x2 else assert false
   in
 
   let f32bits x =
@@ -77,11 +70,8 @@ let mod_inverse x =
     let y = mul y y in
     let x3 = add onee y in
     let x3 = mul x2 x3 in
-    
-    if equal (mul x3 x) onee then
-      x3
-    else
-      assert false
+
+    if equal (mul x3 x) onee then x3 else assert false
   in
   let f64bits x =
     let onee = of_int ~size:64 1 in
@@ -103,10 +93,7 @@ let mod_inverse x =
     let x4 = add onee y in
     let x4 = mul x3 x4 in
 
-    if equal (mul x4 x) onee then
-      x4
-    else
-      assert false
+    if equal (mul x4 x) onee then x4 else assert false
   in
 
   let f128bits x =
@@ -132,10 +119,7 @@ let mod_inverse x =
     let x5 = add onee y in
     let x5 = mul x4 x5 in
 
-    if equal (mul x5 x) onee then
-      x5
-    else
-      assert false
+    if equal (mul x5 x) onee then x5 else assert false
   in
 
   match size_of x with
@@ -144,29 +128,66 @@ let mod_inverse x =
   | 32 -> f32bits x
   | 64 -> f64bits x
   | 128 -> f128bits x
-  | _ -> failwith ("Size not supported - " ^ (string_of_int (size_of x)))
+  | _ -> failwith ("Size not supported - " ^ string_of_int (size_of x))
 
-
-let byteswap (bv: t) : t =
+let byteswap (bv : t) : t =
   let n = size_of bv in
   let rec loop i x =
     if i = n then x
     else
-      let y = extract bv {lo=i; hi=i+8-1} in
+      let y = extract bv { lo = i; hi = i + 8 - 1 } in
       match x with
-      | None -> loop (i+8) (Some y)
-      | Some z -> loop (i+8) (Some (concat [z;y]))
+      | None -> loop (i + 8) (Some y)
+      | Some z -> loop (i + 8) (Some (concat [ z; y ]))
   in
-  loop 0 None
-  |> Option.get
+  loop 0 None |> Option.get
 
+let fold f init bv =
+  let len = size_of bv in
+  let rec loop acc i =
+    if i = len then acc else loop (f acc (get_bit bv i)) (i + 1)
+  in
+  loop init 0
 
-  let fold f init bv =
-    let len = size_of bv in
-    let rec loop acc i =
-      if i = len then acc
-      else loop (f acc (get_bit bv i)) (i+1)
-    in
-    loop init 0
+let to_float bv = Z.to_float (signed_of bv)
 
-let to_float bv  = Z.to_float (signed_of bv)
+let bit_count x = fold (fun acc b -> if b then acc + 1 else acc) 0 x
+
+(** Retrieve the number of set bit at the start of the Bv (in little-endian).
+    For example : trailing_ones 0b00011 = 2 
+                  trailing_ones 0b11010 = 0 
+*)
+let trailing_ones x =
+  let rec loop acc x =
+    (* The loop is not infinite as any number shifted enough time is equal to zero
+       and thus has its first bit equal to zero *)
+    let bit = get_bit x 0 in
+    if not bit then acc else loop (acc + 1) (shift_right x 1)
+  in
+  loop 0 x
+
+(** Retrieve the number of unset bit at the start of the Bv (in little-endian).
+    For example : trailing_zeros 0b00011 = 0 
+                  trailing_zeros 0b11010 = 1 
+*)
+let trailing_zeros x = trailing_ones (lognot x)
+
+(** Retrieve the number of set bit at the end of the Bv (in little-endian).
+    For example : leading_ones 0b00011 = 0 
+                  leading_ones 0b11010 = 2 
+*)
+let leading_ones x =
+  let size = size_of x - 1 in
+  let rec loop acc x =
+    (* The loop is not infinite as any number shifted enough time is equal to zero
+       and thus has its last bit equal to zero *)
+    let bit = get_bit x size in
+    if not bit then acc else loop (acc + 1) (shift_left x 1)
+  in
+  loop 0 x
+
+(** Retrieve the number of unset bit at the end of the Bv (in little-endian).
+    For example : leading_zeros 0b00011 = 2 
+                  leading_zeros 0b11010 = 0 
+*)
+let leading_zeros x = leading_ones (lognot x)

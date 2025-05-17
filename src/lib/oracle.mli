@@ -48,3 +48,4 @@ module type ORACLE = sig
 end
 
 val of_json : filename:string -> int array -> (module ORACLE)
+val dummyOracle : (module ORACLE)

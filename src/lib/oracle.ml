@@ -254,3 +254,18 @@ let of_json ~filename (cst: int array): (module ORACLE) =
         orig_size = Some (get_expr_size json);
     } in
     gen_oracle oracle
+
+let dummyOracle =
+    let oracle = {
+        ctx = ([|
+            {name="v0"; sz=32}; {name="v1"; sz=32};
+            {name="v2"; sz=32}; {name="v3"; sz=32};
+            {name="v4"; sz=32}; {name="v5"; sz=32};
+        |], 
+        {name="output"; sz=32}) ;
+        consts = [||] ;
+        samples = [||] ;
+        ops = None ;
+        orig_size= Some 32;
+    } in
+    gen_oracle oracle

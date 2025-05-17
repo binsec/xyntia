@@ -23,6 +23,7 @@
         (fileutils (>= 0.6.6))
         (bitwuzla (>= 1.0.5))
         (binsec (>= 0.10.0))
+        (ppx_deriving (>= 6.1.0))
         (xyntiasampler (= :version))
     )
     (tags (

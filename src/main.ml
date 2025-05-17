@@ -21,6 +21,8 @@
 
 open Xyntia_utils
 
+let version = "0.2.1"
+
 type cegis_summary = {
     is_used : bool;
     nb_equiv_checks : int;
@@ -38,6 +40,7 @@ type args_t = {
     mutable max_const : int    ;
     mutable maxdepth : int     ;
     mutable json : bool     ;
+    mutable ndjson : bool   ;
     mutable repeat: int     ;
     mutable seed: int option;
     mutable formula : string option;
@@ -51,6 +54,9 @@ type args_t = {
     mutable sample_out : string option;
     mutable sample_only : bool;
     mutable sygus : bool;
+    mutable infrules : string;
+    mutable noguidance : bool;
+    mutable rules_combinator : string;
 }
 
 let n_cegis_loop = ref 1
@@ -110,10 +116,12 @@ let print_expr (output : Oracle.variable) (smry : Heuristic.summary) cegis_smry 
         Printf.printf "number cegis loop: %d\n" cegis_smry.nb_equiv_checks
     );
     Printf.printf "equiv: %s\n" (Checker.answer_to_string cegis_smry.equiv);
+    Printf.printf "number of mutations: %d\n" smry.nb_mutations;
     flush stdout
 
 (** JSON Output of Xyntia **)
-let print_json (output : Oracle.variable) (smry : Heuristic.summary) cegis_smry orig_expr_size =
+let print_json (output : Oracle.variable) (smry : Heuristic.summary) cegis_smry orig_expr_size 
+                ndjson taskid nbtasks =
     let out = Printf.sprintf "%s<%d>" output.name output.sz in
     let open Yojson in
     let res = if cegis_smry.is_used then `Assoc [ 
@@ -128,7 +136,8 @@ let print_json (output : Oracle.variable) (smry : Heuristic.summary) cegis_smry 
             ("simplification_time", `Float smry.time_simplify);
             ("cegis_equiv_check_time", `Float cegis_smry.time_equiv_check);
             ("n_cegis_loop", `Int cegis_smry.nb_equiv_checks);
-            ("equiv", `String (Checker.answer_to_string cegis_smry.equiv));]
+            ("equiv", `String (Checker.answer_to_string cegis_smry.equiv));
+            ("nb_mutations", `Int smry.nb_mutations);]
     else `Assoc [ 
             ("expression", `String smry.expression);
             ("simplified", `String smry.simplified);
@@ -139,10 +148,21 @@ let print_json (output : Oracle.variable) (smry : Heuristic.summary) cegis_smry 
             ("success", `String (if smry.success then "yes" else "no"));
             ("synthesis_time", `Float smry.time_synthesis);
             ("simplification_time", `Float smry.time_simplify);
-            ("equiv", `String (Checker.answer_to_string cegis_smry.equiv));]
+            ("equiv", `String (Checker.answer_to_string cegis_smry.equiv));
+            ("nb_mutations", `Int smry.nb_mutations);]
     in
 
-    Printf.printf "%s\n" (Basic.pretty_to_string res);
+    let res, printer = 
+        if ndjson then 
+            `Assoc [ 
+                ("id", `Int taskid); 
+                ("total", `Int nbtasks);
+                ("results", res) 
+            ], (fun t -> Basic.to_string t)
+        else 
+            res, (fun t -> Basic.pretty_to_string t)
+    in
+    Printf.printf "%s\n" (printer res);
     flush stdout
 
 (** Arguments parser **)
@@ -157,6 +177,7 @@ let parse_args () =
         max_const = 1     ;
         maxdepth =  max_int;
         json = false      ;
+        ndjson = false      ;
         repeat = 1;
         seed = None;
         formula = None;
@@ -170,6 +191,9 @@ let parse_args () =
         sample_out = None;
         sample_only = false;
         sygus = false;
+        infrules = "";
+        noguidance = false;
+        rules_combinator = "product"
     }
     in
     let open Arg in
@@ -214,6 +238,11 @@ let parse_args () =
             "-json",
             Unit (fun () -> args.json <- true),
             "\tJSON format output"
+        );
+        (
+            "-ndjson",
+            Unit (fun () -> args.ndjson <- true),
+            "\tNDJSON format output"
         );
         (
             "-repeat",
@@ -280,6 +309,29 @@ let parse_args () =
             Unit (fun () -> args.sample_only <- true),
             "\tOnly sample"
         );
+        (
+            "-infrules",
+            String (fun h -> args.infrules <- h),
+            "\tList of rules among: +, +_l, *, *_l, mask, maskotf, ^, ^_l, >>u, >>u_l, <<, <<_l, ror, affine, poly2, mba (= +, maskotf, <<, *, ^), all (= +, maskotf, <<, >>u, *, ^, ror, poly2, affine)"
+        );
+        (
+            "-infrules-final-only",
+            Unit (fun () -> args.noguidance <- true),
+            "\tUse the inference rules only as termination criteria (not in the guidance)"
+        );
+        (
+            "-infrules-combinator",
+            String (fun h -> args.rules_combinator <- h),
+            "\tSelect the operation to combine the inference rule distances: product, min"
+        );
+        (
+            "-version",
+            Unit (fun () -> 
+                Printf.printf "%s\n" version;
+                exit 0    
+            ),
+            "\tPrint version number"
+        );
     ])
     (fun h -> args.samplingf <- h)
         "
@@ -313,16 +365,16 @@ let get_oracle args samplefile =
     Oracle.of_json ~filename:samplefile csts
 
 let get_mutations args (module O : Oracle.ORACLE) = match args.ops with
-        | "mba" | "expr" | "full" | "5" | "mba_shift" | "mba_ite" | "sygus" | "expr_ite" | "expr_x86" | "full_x86" -> Tree.mutations_of_str (module O: Oracle.ORACLE) args.ops
+        | "mba" | "expr" | "full" | "5" | "mba_shift" | "mba_ite" | "sygus" | "expr_ite" | "expr_x86" | "full_x86" -> Mutations.mutations_of_str (module O: Oracle.ORACLE) args.ops
         | _ -> 
             let l = String.split_on_char ',' args.ops in
             let arr = Array.init (List.length l) (fun i -> String.trim (List.nth l i)) in
-            Tree.mutations_of_operators (module O: Oracle.ORACLE) arr
+            Mutations.mutations_of_operators (module O: Oracle.ORACLE) arr
 
 let get_sygus args samplefile = 
     let oracle = get_oracle args samplefile in
     let module O = (val oracle : Oracle.ORACLE) in
-    let (module MU : Tree.MUTATIONS) = get_mutations args (module O: Oracle.ORACLE) in
+    let (module MU : Mutations.MUTATIONS) = get_mutations args (module O: Oracle.ORACLE) in
     let module SyGus = Sygus.SyGusPrinter (O) (MU) in
     match args.sample_out with
     | Some odir  -> 
@@ -335,7 +387,38 @@ let get_sygus args samplefile =
         Printf.printf "%s\n" (SyGus.print ());
         Format.print_flush ()
 
-let run_task args samplefile formula = 
+let get_infrules_combinator args =
+    let min_combinator x y = 
+        let abs_x = abs_float x in
+        let abs_y = abs_float y in
+        if abs_x < abs_y then abs_x else abs_y
+    in
+    match args.rules_combinator with
+    | "product" -> ( *. )
+    | "min" -> min_combinator
+    | _ -> failwith "-infrules-combinator is only available for \"product\" and \"min\""
+
+let get_final_distances (type a) (args : args_t) (module D : Distance.DIST) (module O : Oracle.ORACLE) (module T : Tree.TreeConstructor with type data = a) =
+    let module G = Distance.GuideModCst (D) (O) (T) in 
+    let l = String.split_on_char ',' args.infrules in
+    (* filter empty string *)
+    let arr = List.filter_map (fun str -> let s = String.trim str in if String.equal s String.empty then None else Some s) l in
+    let dists : ((module Distance.VECDIST with type t = a)) list = List.concat_map
+        (fun infr -> (Distance.infrules_of_str infr (module D) (module O) (module T))) arr 
+    in
+    let dists = (module G.NoGuide : Distance.VECDIST with type t = a) :: dists in
+    let module FD = Distance.CombineVecDist (struct
+        type t = T.data
+        let combinator = get_infrules_combinator args                    
+        let dists = dists 
+    end)
+    in (module FD : Distance.VECDIST with type t = T.data)
+    
+let get_guiding_distance (type a) noguidance (module D : Distance.DIST) (module FD : Distance.VECDIST with type t = a) (module T : Tree.TreeConstructor with type data = a) : (module Distance.VECDIST with type t = a) =
+    if noguidance then Distance.vectorizeDist Distance.dist_vec (module D) (module T)
+    else (module FD)
+
+let run_task taskid nbtasks args samplefile formula =
     let oracle = get_oracle args samplefile in
     let module O = (val oracle : Oracle.ORACLE) in
 
@@ -349,14 +432,18 @@ let run_task args samplefile formula =
         | _ -> failwith (Printf.sprintf "Unknown heurisitic: %s" args.dist) 
     in
     
-    let (module MU : Tree.MUTATIONS) = get_mutations args (module O: Oracle.ORACLE) in
-    let module M = Tree.Mk_Mutator (O) (MU) in 
-    
-    let (module D : Distance.VECDIST) = 
-        Distance.vectorizeDist Distance.dist_vec distance in
+    let (module MU : Mutations.MUTATIONS) = get_mutations args (module O: Oracle.ORACLE) in
+    let module M = Mutations.Mk_Mutator (O) (MU) in
+
+    let (module FD : Distance.VECDIST with type t = M.data) = 
+        get_final_distances args distance (module O) (module M)
+    in
+    let (module GD : Distance.VECDIST with type t = M.data) = 
+        get_guiding_distance args.noguidance distance (module FD) (module M)
+    in
 
     let (module S : Heuristic.S) = Heuristic.of_string 
-        (module D) (module O) (module M) args.heuristic
+        (module M) (module GD) (module FD) (module O) args.heuristic
     in
 
     let (module EChecker : Checker.CheckerType) = 
@@ -365,21 +452,22 @@ let run_task args samplefile formula =
     let run_loop () =
         set_timeout args.time;
         S.search args.maxdepth
-
     in
 
     let cumul_synth_time = ref 0.0 in
     let cumul_simpl_time = ref 0.0 in
     let cumul_echeck_time = ref 0.0 in
+    let cumul_mutations = ref 0 in
 
     let rec main_loop n =
         let smry = run_loop () in
         cumul_synth_time := !cumul_synth_time +. smry.time_synthesis;
         cumul_simpl_time := !cumul_simpl_time +. smry.time_simplify;
+        cumul_mutations := !cumul_mutations + smry.nb_mutations;
         if n <= 1 || smry.success then
             smry
         else
-            main_loop (n-1)   
+            main_loop (n-1)
     in
 
     let cegis_loop filename = 
@@ -435,7 +523,7 @@ let run_task args samplefile formula =
         ) else isequiv 
     in
     
-    let full_smry : Heuristic.summary = { 
+    let full_smry : Heuristic.summary = {
         success = smry.success; 
         expression = smry.expression;
         simplified = smry.simplified;
@@ -443,6 +531,7 @@ let run_task args samplefile formula =
         size = smry.size;
         time_synthesis = !cumul_synth_time;
         time_simplify = !cumul_simpl_time;
+        nb_mutations = !cumul_mutations;
     } in
 
     let cegis_smry : cegis_summary = {
@@ -456,15 +545,14 @@ let run_task args samplefile formula =
     | Some s -> s
     | None -> -1
     in
-
-    if args.json then 
-        print_json (O.out_var ()) full_smry cegis_smry origsize
+    
+    if args.json || args.ndjson then 
+        print_json (O.out_var ()) full_smry cegis_smry origsize args.ndjson taskid nbtasks
     else
         print_expr (O.out_var ()) full_smry cegis_smry origsize
 
 
 let () =
-
     let _ = if (Array.length Sys.argv) = 1 then 
         begin
             Printf.printf "No argument given. Documentation is available through %s -help\n" Sys.argv.(0); 
@@ -493,7 +581,7 @@ let () =
     if args.sample_only then
         exit 0;
 
-    List.iter (fun sample -> run_task args sample formula) samples;
+    List.iteri (fun id sample -> run_task id (List.length samples) args sample formula) samples;
 
     if Option.is_none args.sample_out then
         match args.binaryfile, args.binsec_config with

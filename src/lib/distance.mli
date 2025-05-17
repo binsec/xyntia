@@ -20,14 +20,17 @@
 (**************************************************************************)
 
 module type DIST = sig
+  val name : string
   val dist : Bitvector.t -> Bitvector.t -> float
   val is_zero : float -> bool
 end
 
 module type VECDIST = sig
+  type t
+  val name : string
   val vecdist : Bitvector.t array -> Bitvector.t array -> float
   val is_zero : float -> bool
-  val extract : Tree.t -> Bitvector.t array -> Bitvector.t array -> Tree.t
+  val extract : t Tree.t -> Bitvector.t array -> Bitvector.t array -> t Tree.t
 end
 
 module Arith : DIST
@@ -48,5 +51,74 @@ module Syntia : DIST
 val dist_vec : float array -> float
 (** How do we aggregate the distance along a vector of input output *)
 
-val vectorizeDist : (float array -> float) -> (module DIST) -> (module VECDIST)
+val vectorizeDist : (float array -> float) -> (module DIST) -> (module Tree.TreeConstructor with type data = 'a) -> (module VECDIST with type t = 'a)
 (** Transform a bitvector distance into a (in,out) vector distance *)
+
+module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) : sig
+  module NoGuide : VECDIST with type t = M.data
+  (** Distance without guiding *)
+
+  module Offset : VECDIST with type t = M.data
+  (** Guiding distance for add/sub *)
+
+  module MinOffset : VECDIST with type t = M.data
+  (** Guiding distance for add/sub searching the minimum offset instead of the first one *)
+
+  module Xor : VECDIST with type t = M.data
+  (** Guiding distance for xor *)
+
+  module MinXor : VECDIST with type t = M.data
+  (** Guiding distance for xor searching minimal distance on all the output,expected pair *)
+
+  module Mask : VECDIST with type t = M.data
+  (** Guiding distance for combined 'and' and 'or'.
+      The generated masks are the one that adds the most constraints to the output.
+  *)
+
+  module MaskOTF : VECDIST with type t = M.data
+  (** Guiding distance for combined 'and' and 'or' which computes the mask on-the-fly.
+      This produces masks that adds the least constraints to the output.
+  *)
+
+  module ShiftLeft : VECDIST with type t = M.data
+  (** Guiding distance for logical shift left *)
+
+  module MinShiftLeft : VECDIST with type t = M.data
+  (** Guiding distance for logical shift left searching minimal distance on all the possible shifts *)
+
+  module UShiftRight : VECDIST with type t = M.data
+  (** Guiding distance for logical shift right *)
+
+  module MinUShiftRight : VECDIST with type t = M.data
+  (** Guiding distance for logical shift right searching minimal distance on all the possible shifts *)
+
+  module Mul : VECDIST with type t = M.data
+  (** Guiding distance for multiplication *)
+
+  module MinMul : VECDIST with type t = M.data
+  (** Guiding distance for multiplication searching the minimum scalar instead of the first one *)
+
+  module Rotate : VECDIST with type t = M.data
+  (** Guiding distance for rotate *)
+
+  module Affine : VECDIST with type t = M.data
+  (** Guiding distance for affine function *)
+
+  module LinearComb () : VECDIST with type t = M.data
+  (** Guiding distance for linear combination of variables and expression *)
+
+  module Byteswap : VECDIST with type t = M.data
+  (** Guiding distance for byteswap *)
+
+  module Poly2 : VECDIST with type t = M.data
+  (** Guiding distance for 2nd degree polynomial *)
+end
+
+(** Combines multiple vectorial distance into a single one *)
+module CombineVecDist (M : sig
+  type t
+  val combinator : float -> float -> float
+  val dists : (module VECDIST with type t = t) list
+end) : VECDIST with type t = M.t
+
+val infrules_of_str : string -> (module DIST) -> (module Oracle.ORACLE) -> (module Tree.TreeConstructor with type data = 'a) -> (module VECDIST with type t = 'a) list

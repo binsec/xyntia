@@ -1,3 +1,24 @@
+(**************************************************************************)
+(*  This file is part of BINSEC.                                          *)
+(*                                                                        *)
+(*  Copyright (C) 2019-2025                                               *)
+(*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
+(*         alternatives)                                                  *)
+(*                                                                        *)
+(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  Lesser General Public License as published by the Free Software       *)
+(*  Foundation, version 2.1.                                              *)
+(*                                                                        *)
+(*  It is distributed in the hope that it will be useful,                 *)
+(*  but WITHOUT ANY WARRANTY; without even the implied warranty of        *)
+(*  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *)
+(*  GNU Lesser General Public License for more details.                   *)
+(*                                                                        *)
+(*  See the GNU Lesser General Public License version 2.1                 *)
+(*  for more details (enclosed in the file licenses/LGPLv2.1).            *)
+(*                                                                        *)
+(**************************************************************************)
+
 open Libterm.Sexpr
 
 (* Reimplementation of Libterm.Sexpr.eval to be able to read memory not only char by char but with a given size *)
@@ -23,8 +44,8 @@ let read_bytes =
   let fill_bytes f term addr len (dir : Machine.endianness) cache bits i =
     let addr = Bv.add_int addr (-len) in
     let i = match dir with LittleEndian -> i - len | BigEndian -> i + 1 in
-    fill_bytes cache (f term addr len dir) (Bv.value_of addr) (len lsl 3) bits
-      i (succ dir)
+    fill_bytes cache (f term addr len dir) (Bv.value_of addr) (len lsl 3) bits i
+      (succ dir)
   in
   let rec read_bytes_hit f term addr len dir cache bits i =
     if len <> 0 then
@@ -90,30 +111,30 @@ let rec eval
         in
         BvTbl.add values e value;
         value)
+
 and eval_load ~symbols ~memory ((_, _, cache, arrays, _) as t) ptr len dir
-        (memory_term : Memory.t) =
-      match memory_term with
-      | Root -> read_bytes memory memory_term ptr len dir cache
-      | Symbol n ->
-          read_bytes memory memory_term ptr len dir
-            (try StTbl.find arrays n
-             with Not_found ->
-               let arr = BiTbl.create 16 in
-               StTbl.add arrays n arr;
-               arr)
-      | Layer { addr; store; over; _ } ->
-          let addr = eval ~symbols ~memory t addr in
-          let size = Bv.size_of addr in
-          let offset = Bv.sub ptr addr in
-          let miss i s =
-            Chunk.of_term
-              (Expr.load s Expr.LittleEndian
-                 (Expr.constant (Bv.add addr (Bv.create i size)))
-                 over)
-          in
-          let bytes = Chunk.to_term (Store.select miss offset len store) in
-          let bytes =
-            match dir with LittleEndian -> bytes | BigEndian -> bswap bytes
-          in
-          eval ~symbols ~memory t bytes
-  
+    (memory_term : Memory.t) =
+  match memory_term with
+  | Root -> read_bytes memory memory_term ptr len dir cache
+  | Symbol n ->
+      read_bytes memory memory_term ptr len dir
+        (try StTbl.find arrays n
+         with Not_found ->
+           let arr = BiTbl.create 16 in
+           StTbl.add arrays n arr;
+           arr)
+  | Layer { addr; store; over; _ } ->
+      let addr = eval ~symbols ~memory t addr in
+      let size = Bv.size_of addr in
+      let offset = Bv.sub ptr addr in
+      let miss i s =
+        Chunk.of_term
+          (Expr.load s Expr.LittleEndian
+             (Expr.constant (Bv.add addr (Bv.create i size)))
+             over)
+      in
+      let bytes = Chunk.to_term (Store.select miss offset len store) in
+      let bytes =
+        match dir with LittleEndian -> bytes | BigEndian -> bswap bytes
+      in
+      eval ~symbols ~memory t bytes

@@ -1,0 +1,20 @@
+stages:
+  - opam
+
+opam:pin:
+  tags:
+    - docker
+  stage: opam
+  image: 'ocaml/opam:$OS-ocaml-$OCAML'
+  parallel:
+    matrix:
+    - OS: [ 'debian' ]
+      OCAML: [ '4.14' ]
+  script: >
+    true
+    && opam pin -n -k path add . 
+    && opam depext -u -i xyntia
+    && opam exec -- xyntia -help
+# We should place a -version instead of the help but
+# we do not have such an option in Xyntia
+# Credit : Copied from BINSEC

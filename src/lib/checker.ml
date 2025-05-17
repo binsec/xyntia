@@ -28,7 +28,7 @@ let answer_to_string = function
 
 type counter_example = { 
   inputs : (Oracle.variable * Bitvector.t) array;
-  output : (Oracle.variable * Bitvector.t)  
+  output : Oracle.variable * Bitvector.t;
 }
 
 module type CheckerType = sig
@@ -38,20 +38,24 @@ module type CheckerType = sig
   val get_counter_example : unit -> counter_example
 end
 
-module EquivChecker (O : Oracle.ORACLE) (Solver : Smt.Smt_sig.Solver)= struct
+module EquivChecker (O : Oracle.ORACLE) (Solver : Smt.Smt_sig.Solver) = struct
   let solver = ref None
+
   let open_session () =
-      match !solver with
-      Some _ -> failwith "Cannot open a session twice"
-      | None -> solver := Some (Solver.open_session ())
+    match !solver with
+    | Some _ -> failwith "Cannot open a session twice"
+    | None -> solver := Some (Solver.open_session ())
+
   let close_session () = 
     match !solver with
-      | Some s -> Solver.close_session s; solver := None
-      | None -> ()
+    | Some s ->
+      Solver.close_session s;
+      solver := None
+    | None -> ()
       
   let check formula_file smtexpr = 
       let solv = match !solver with
-      | Some s -> s
+      | Some s -> s 
       | None -> failwith "Session not open"
       in
 

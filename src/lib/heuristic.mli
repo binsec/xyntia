@@ -24,18 +24,16 @@ type summary = {
     expression : string ;
     simplified : string ;
     smtlib : string ;
-    size : int;
-    time_synthesis : float;
-    time_simplify : float;
+    size : int ;
+    time_synthesis : float ;
+    time_simplify : float ;
+    nb_mutations : int ;
 }
 
 module type S = sig
     val search : int -> summary
 end
 
-module Mk_iterated_local_search (D: Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* ils *)
-module Mk_random_walk           (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* rw  *)
-module Mk_hill_climbing         (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* hc  *)
-module Mk_simulated_annealing   (D : Distance.VECDIST) (O : Oracle.ORACLE) (M : Tree.MUTATOR) : S (* sa  *)
-
-val of_string : (module Distance.VECDIST) -> (module Oracle.ORACLE) -> (module Tree.MUTATOR) -> string -> (module S)
+(* Generates a search heuristics.
+   The first VECDIST is the guiding distance while the second is the final one *)
+val of_string : (module Mutations.MUTATOR) -> (module Distance.VECDIST with type t = Mutations.mutd) -> (module Distance.VECDIST with type t = Mutations.mutd) -> (module Oracle.ORACLE) -> string -> (module S)
