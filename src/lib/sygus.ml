@@ -134,6 +134,18 @@ module SyGusPrinter (O: Oracle.ORACLE) (MU : Mutations.MUTATIONS) = struct
     in
 
     let rules = rules ^ glue ^ "))\n" in
+
+    (* add comments about variable ordering*)
+    let comment = 
+        (* out var*)
+        Printf.sprintf ";out: %s<%d>\n" ovar.name osize ^
+        (* in vars*)
+        let acc, _ = (Array.fold_left (fun (acc,idx) (var : Oracle.variable) -> 
+          let n = sprintf ";v%d: %s<%d>" idx var.name var.sz in
+          (acc ^ n ^ "\n", idx + 1)
+        ) ("",0) invars) 
+        in acc
+    in
     
     (* Add samples *)
     let samples = Array.init (O.nsamples ()) (fun i -> 
@@ -150,7 +162,7 @@ module SyGusPrinter (O: Oracle.ORACLE) (MU : Mutations.MUTATIONS) = struct
     let samples = (Array.fold_left (fun acc s -> acc ^ "\n" ^ s) "" samples) ^ "\n" in
 
     let checksynth = "(check-synth)" in
-    "(set-logic BV)\n" ^ synth_fun ^ decl ^ rules ^ samples ^ checksynth
+    "(set-logic BV)\n" ^ synth_fun ^ decl ^ rules ^ comment ^ samples ^ checksynth
 end
   
   
