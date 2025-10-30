@@ -8,7 +8,8 @@
     3.  [Grammar abbreviations](#grammar-abbreviations)
     4.  [Heuristic abbreviations](#heuristic-abbreviations)
     5.  [Inference rules](#inference-rules)
-    6.  [Generating SyGUS problems](#generating-sygus-problems)
+    6.  [Counter-Example Guided Inductive Synthesis (CEGIS)](#cegis)
+    7.  [Generating SyGUS problems](#generating-sygus-problems)
 3.  [Experiments](#experiments)
 4.  [Synthesize all blocks from a execution trace](#synthesize-all-blocks-from-a-execution-trace)
 5.  [References](#references)
@@ -112,6 +113,16 @@ It is also possible to sample a symbolic expression directly. An example is give
 # The <() is here to replace the binary path. Indeed, in this case we do not need any binary (only an empty file)
 xyntia -bin <() -config sampler/examples/expr.ini
 ```
+
+### Equivalence checking
+
+Leveraging Binsec to extract the semantics of a binary code snippet (or a synthetic expression) enables Xyntia to check the correctness of the synthesis. This can be done through the `-check` option.
+
+Back to our example, you can check if the result of Xyntia is correct as follows:
+```
+xyntia -bin examples/bin/add -config examples/bin/add.ini -check
+```
+The result will be either `yes`, `no` or `ukn` (unknown i.e., the solver timeouted).
 
 </details>
 
@@ -265,6 +276,25 @@ We provide an example of obfuscated expression from the snapchat app. To apply X
 ```
 $ xyntia -bin samplers/examples/snapchat -config samplers/examples/snapchat.ini -infrules all 
 ```
+
+</details>
+
+## CEGIS
+
+<details open><summary>Show</summary>
+
+Xyntia includes a *Counter-example guided inductive synthesis* loop. The idea to check if the synthesis result is correct and provide a counter-example if it is not. This counter-example is added to the set of input-output examples and synthesis is relaunched. 
+CEGIS loops until an equivalent solution have been found or the time budget elapsed. 
+
+To use CEGIS, you can use the `-cegis` option.
+```
+$ xyntia -bin examples/bin/add -config examples/bin/add.ini -cegis
+```
+
+**Remarks:**
+* You can set a timeout of each synthesis step through the usual `-time` option;
+* To set the timeout of the overall cegis loop, use `timeout <val> xyntia -cegis ...`;
+* If `-cegis` is set the `-check` option is redundante (can be set but will change nothing).
 
 </details>
 
