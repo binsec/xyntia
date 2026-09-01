@@ -1,22 +1,23 @@
+(dirs)
 (library
  (public_name xyntiasampler)
  (name xyntiasampler)
- (modules modeleval termsampler)
+ (modules modeleval termsampler xgrammar xcli register spinner)
  (flags
   (:standard
    -open
-   Binsec
+   Binsec_kernel
    -open
-   Smt
+   Binsec_smtlib
    -open
-   Libsse
+   Binsec_sse
    -open
-   Libterm
+   Binsec_base
    -open
    Yojson
    -w
    "-58"))
- (libraries binsec.smt binsec.sse binsec.sse.term yojson))
+ (libraries progress binsec.smtlib binsec.sse binsec.cli.sse binsec.base yojson))
 
 (plugin
  (package xyntiasampler)

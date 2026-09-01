@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -59,14 +59,14 @@ let test_logarith_dist _ =
 
 let qcheck = [ 
     QCheck.Test.make ~count:1000 ~name:"positive_arith_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Arith in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
             (D.dist bit1 bit2) >= 0.0);
 
     QCheck.Test.make ~count:1000 ~name:"min_diff_arith_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Arith in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
@@ -76,14 +76,14 @@ let qcheck = [
                 not (D.is_zero (D.dist bit1 bit2)));
 
     QCheck.Test.make ~count:1000 ~name:"positive_hamming_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Hamming in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
             (D.dist bit1 bit2) >= 0.0);
 
     QCheck.Test.make ~count:1000 ~name:"min_diff_hamming_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Hamming in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
@@ -93,14 +93,14 @@ let qcheck = [
                 not (D.is_zero (D.dist bit1 bit2)));
 
     QCheck.Test.make ~count:1000 ~name:"positive_xor_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Xor in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
             (D.dist bit1 bit2) >= 0.0);
 
     QCheck.Test.make ~count:1000 ~name:"min_diff_xor_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Xor in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
@@ -110,14 +110,14 @@ let qcheck = [
                 not (D.is_zero (D.dist bit1 bit2)));
 
     QCheck.Test.make ~count:1000 ~name:"positive_logarith_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Logarith in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
             (D.dist bit1 bit2) >= 0.0);
 
     QCheck.Test.make ~count:1000 ~name:"min_diff_logarith_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Logarith in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
@@ -127,14 +127,14 @@ let qcheck = [
                 not (D.is_zero (D.dist bit1 bit2)));
 
     QCheck.Test.make ~count:1000 ~name:"positive_syntia_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Syntia in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in
             (D.dist bit1 bit2) >= 0.0);
 
     QCheck.Test.make ~count:1000 ~name:"min_diff_syntia_dist"
-        QCheck.(pair small_int small_int)
+        QCheck.(pair nat_small nat_small)
         (fun (i1, i2) ->  
             let module D = Distance.Syntia in
             let bit1, bit2 = (Bitvector.of_int32 (Int32.of_int i1)), (Bitvector.of_int32 (Int32.of_int i2)) in

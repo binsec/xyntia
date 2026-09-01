@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -70,7 +70,25 @@ type binop_t =
 
 type triop_t = Div | SDiv | Mod | SMod | ITE | Im [@@deriving eq, enum, ord]
 
+type 'a binop_side = Left of 'a | Right of 'a | Both of 'a
+type 'a fromout = { from: 'a binop_side; out:'a }
+
+let select omega = omega.(Random.int (Array.length omega))
+
+module Extract (Op : sig 
+  type t
+  val number : int  
+  val of_int : int -> t 
+end) = struct
+  let omega = Array.init Op.number Op.of_int
+
+  let rand () =  select omega
+  let cardinal () = Array.length omega
+end
+
 module SizeMod = struct
+  type t = sizemod_t
+
   let eq = equal_sizemod_t
   
   let compare = compare_sizemod_t
@@ -93,7 +111,8 @@ module SizeMod = struct
     | Sextend sz -> Printf.sprintf "((_ sign_extend %d) %s)" (sz - sz1) term1
 end
 
-module Unop = struct
+module UnopBase = struct
+  type t = unop_t
   let number = max_unop_t + 1 (* number of operators *)
   let compare = compare_unop_t
 
@@ -123,6 +142,9 @@ module Unop = struct
   | Shesh -> Bitvector.shift_right x 16
   | Smol -> Bitvector.shift_left x 1
 
+  let get_bitsz op bitsz = match op with
+  | Minus | Not | Byteswap | Ehad | Arba | Shesh | Smol -> bitsz
+
   let to_string = function
   | Minus -> "-"
   | Not -> "not"
@@ -150,7 +172,9 @@ module Unop = struct
     | Smol -> Format.sprintf "(bvshl %s %s)" term1 (cst_to_smtlib 1 sz1)
 end
 
-module Binop = struct
+module BinopBase = struct
+  type t = binop_t
+
   let number = max_binop_t + 1 (* number of operators*)
   let compare = compare_binop_t
 
@@ -199,27 +223,95 @@ module Binop = struct
     | Xor | Sub -> true
     | _ -> false
   
-  let neutral_element = function
-    | Add | Sub | Or | Xor
-    | RShifts | RShiftu | LShift
-    | RShifts_x86 | RShiftu_x86 | LShift_x86 ->
-      Bitvector.is_zeros
-    | Mul -> Bitvector.is_ones
-    | And -> Bitvector.is_max_ubv
-    | UMax -> Bitvector.is_zeros
-    | UMin -> Bitvector.is_max_ubv
-    | SMax -> Bitvector.is_min_sbv
-    | SMin -> Bitvector.is_max_sbv
-    | _ -> Fun.const false
+  let is_neutral_element ty ?(dir=Both()) e = 
+    match ty, dir with
+    | (Or | Add | Xor | UMax), _
+      when Bitvector.is_zeros e -> true
+    | (And | UMin), _ 
+      when Bitvector.is_max_ubv e -> true 
+    | SMax, _ 
+      when Bitvector.is_min_sbv e -> true
+    | SMin, _ 
+      when Bitvector.is_max_sbv e -> true
+    | Mul, _ 
+      when Bitvector.is_ones e -> true
+    | (Sub | RotateRight 
+      | RShifts | RShiftu 
+      | RShifts_x86 | RShiftu_x86 
+      | LShift | LShift_x86), Right ()
+      when Bitvector.is_zeros e -> true    
+    | _ -> false
   
-  let absorbing_element = function
-    | Or -> Bitvector.is_max_ubv
-    | Mul | And -> Bitvector.is_zeros
-    | UMax -> Bitvector.is_max_ubv
-    | UMin -> Bitvector.is_zeros
-    | SMax -> Bitvector.is_max_sbv
-    | SMin -> Bitvector.is_min_sbv
-    | _ -> Fun.const false
+  let is_absorbing_element ty ?(dir=Both ()) e = 
+    match ty, dir with
+    | Or, _ -> Bitvector.is_max_ubv e
+    | (Mul | And), _ -> Bitvector.is_zeros e
+    | UMax, _ -> Bitvector.is_max_ubv e
+    | UMin, _ -> Bitvector.is_zeros e
+    | SMax, _ -> Bitvector.is_max_sbv e
+    | SMin, _ -> Bitvector.is_min_sbv e
+    | _ -> false
+
+  let get_neutral op sz = 
+    match op with
+    | Or | Add | Xor | UMax -> Some (Both (Bitvector.zeros sz))
+    | Sub | RotateRight 
+    | RShifts | RShiftu 
+    | RShifts_x86 | RShiftu_x86 
+    | LShift | LShift_x86 -> Some (Right (Bitvector.zeros sz))
+    | Mul -> Some (Both (Bitvector.ones sz))
+    | And | UMin -> Some (Both (Bitvector.max_ubv sz)) 
+    | SMax -> Some (Both (Bitvector.min_sbv sz))
+    | SMin -> Some (Both (Bitvector.max_sbv sz))
+    | _ -> None
+
+  let has_neutral = function
+  | Or | Add | Xor | UMax 
+  | Sub | RotateRight 
+  | RShifts | RShiftu 
+  | RShifts_x86 | RShiftu_x86 
+  | LShift | LShift_x86 
+  | Mul | And  
+  | SMax | SMin -> true
+  | _ -> false
+
+  let has_annihilator = function
+  | Mul | And | Or
+  | UMin | UMax
+  | SMin | SMax
+  | RShiftu | RShiftu_x86 
+  | LShift | LShift_x86 -> true
+  | _ -> false
+
+  let get_annihilator op sz = match op with
+  | Mul | And | UMin -> Some {from=(Both (Bitvector.zeros sz)); out=(Bitvector.zeros sz)}
+  | Or | UMax -> Some {from=(Both (Bitvector.max_ubv sz)); out=(Bitvector.max_ubv sz)}
+  | RShiftu | RShiftu_x86 
+  | LShift | LShift_x86 -> Some {from=(Right (Bitvector.max_sbv sz)); out=(Bitvector.zeros sz)}
+  | SMax -> Some {from=(Both (Bitvector.max_sbv sz)); out=(Bitvector.max_sbv sz)}
+  | SMin -> Some {from=(Both (Bitvector.min_sbv sz)); out=(Bitvector.min_sbv sz)}
+  | _ -> None
+
+  let inversible = function
+  | Add | Sub | Xor -> true
+  | _ -> false
+
+  let inverse op out cst = match op with
+  | Add -> Some (Bitvector.sub out cst)
+  | Sub -> Some (Bitvector.add out cst)
+  | Xor -> Some (Bitvector.logxor out cst)
+  | _ -> None
+
+  let is_infix = function
+  | Add | Sub | Mul 
+  | And | Or | Xor 
+  | RShiftu | LShift | RShifts
+  | LShift_x86 | RShiftu_x86 | RShifts_x86
+    -> true
+  | RotateRight
+  | Div_x86 | SDiv_x86 | Mod_x86 | SMod_x86
+  | UMin | UMax | SMin | SMax 
+    -> false
 
   let to_string = function
   | Add -> "+"
@@ -295,8 +387,6 @@ module Binop = struct
   | SMax -> Format.sprintf "(ite (bvsgt %s %s) %s %s)" term1 term2 term1 term2
 
 
-  let unsigned_int x size = (x + (1 lsl size)) mod (1 lsl size) 
-
   let apply op x y = 
       let _ = if (Bitvector.size_of x) != (Bitvector.size_of y) then failwith "Binop.apply: different sizes" in
       let size = Bitvector.size_of x in
@@ -308,20 +398,32 @@ module Binop = struct
       | Or  -> Bitvector.logor x y
       | Xor -> Bitvector.logxor x y
       | RShiftu -> 
-          (* TODO : Why can we not use Bitvector.to_uint ? *)
-          let offset = unsigned_int (Bitvector.to_int y) (Bitvector.size_of y) in
-          Bitvector.shift_right x offset 
+          if Bitvector.uge y (Bitvector.of_int ~size size) then (
+            Bitvector.zeros size
+          )
+          else (
+            let offset = Bitvector.to_uint y in
+            Bitvector.shift_right x offset 
+          )
       | LShift -> 
-          let offset = unsigned_int (Bitvector.to_int y) (Bitvector.size_of y) in
-          Bitvector.shift_left x offset 
+          if Bitvector.uge y (Bitvector.of_int ~size size) then (
+            Bitvector.zeros size
+          )
+          else (
+            let offset = Bitvector.to_uint y in
+            Bitvector.shift_left x offset 
+          )
       | RShifts -> 
-          let offset = Bitvector.to_int y in 
-          if offset < 0 && (Bitvector.sgt x (Bitvector.zeros size)) then 
+          if Bitvector.uge y (Bitvector.of_int ~size size) then (
+            if Bitvector.is_neg x then
+              Bitvector.fill size
+            else
               Bitvector.zeros size
-          else if offset < 0 && (Bitvector.sle x (Bitvector.zeros size)) then 
-              Bitvector.ones size
-          else 
-              Bitvector.shift_right_signed x offset
+          )
+          else (
+            let offset = Bitvector.to_uint y in 
+            Bitvector.shift_right_signed x offset
+          )
       | RotateRight ->
           let bvsize = Bitvector.of_int ~size:size size in
           let offset = Bitvector.(urem y bvsize |> to_uint) in
@@ -391,10 +493,20 @@ module Binop = struct
       | UMin -> Bitvector.umin x y
       | UMax -> Bitvector.umax x y
       | SMin -> Bitvector.smin x y
-      | SMax -> Bitvector.smax x y  
+      | SMax -> Bitvector.smax x y
+
+  let get_bitsz op bitsz1 bitsz2 =
+    match op with
+    | Add | Sub | Mul | And | Or | Xor | RShiftu | LShift | RShifts 
+    | RotateRight | Div_x86 | SDiv_x86 | Mod_x86 | SMod_x86 | RShiftu_x86 
+    | LShift_x86 | RShifts_x86 | UMin | SMin | UMax | SMax ->
+      assert (bitsz1 == bitsz2);
+      bitsz1
 end
 
-module Triop = struct
+module TriopBase = struct
+  type t = triop_t
+
   let number = max_triop_t + 1 (* number of operators *)
   let compare = compare_triop_t
 
@@ -427,95 +539,73 @@ module Triop = struct
   | Im -> assert false
 
   let to_sygus op term1 sz1 term2 sz2 term3 sz3 = 
-  let catsize = sz1 + sz2 in
-  let size = sz3 in
-  match op with
-  | Div | Mod -> 
-    Format.sprintf "((_ extract %d 0) (%s (concat %s %s) ((_ zero_extend %d) %s)))" (size-1) (to_smtlib op) term1 term2 (catsize - size) term3
-  | SDiv | SMod -> 
-    Format.sprintf "((_ extract %d 0) (%s (concat %s %s) ((_ sign_extend %d) %s)))" (size-1) (to_smtlib op) term1 term2 (catsize - size) term3
-  | ITE -> Format.sprintf "(ite (distinct  %s (_ bv0 %d)) %s %s)" term1 sz1 term2 term3
-  | Im -> Format.sprintf "(ite (= %s %s) %s %s)" term1 (cst_to_smtlib 1 sz1) term2 term3
+    let catsize = sz1 + sz2 in
+    let size = sz3 in
+    match op with
+    | Div | Mod -> 
+      Format.sprintf "((_ extract %d 0) (%s (concat %s %s) ((_ zero_extend %d) %s)))" (size-1) (to_smtlib op) term1 term2 (catsize - size) term3
+    | SDiv | SMod -> 
+      Format.sprintf "((_ extract %d 0) (%s (concat %s %s) ((_ sign_extend %d) %s)))" (size-1) (to_smtlib op) term1 term2 (catsize - size) term3
+    | ITE -> Format.sprintf "(ite (distinct  %s (_ bv0 %d)) %s %s)" term1 sz1 term2 term3
+    | Im -> Format.sprintf "(ite (= %s %s) %s %s)" term1 (cst_to_smtlib 1 sz1) term2 term3
 
-  let apply op x y z = 
-      let _ = if (Bitvector.size_of x) != (Bitvector.size_of y) || (Bitvector.size_of y) != (Bitvector.size_of z) then failwith "Triop.apply: different sizes" in
-      let catsize = (Bitvector.size_of x) + (Bitvector.size_of y) in                                                                                                                                             
-      let size = (Bitvector.size_of z) in
-      match op with
-      | Div ->
-          if Bitvector.is_zeros z then
-              Bitvector.max_ubv size
-          else
-              Bitvector.extract (Bitvector.udiv (Bitvector.concat [x; y]) (Bitvector.extend z catsize)) { lo=0; hi=size-1}
-      | SDiv -> 
-          let cat = Bitvector.concat [x; y] in
-          if Bitvector.is_zeros z then
-              if Bitvector.sge cat (Bitvector.zeros catsize) then
-                  Bitvector.max_ubv size
-              else Bitvector.ones size
-          else
-              Bitvector.extract (Bitvector.sdiv cat (Bitvector.extend_signed z catsize)) {lo=0; hi=(size-1)}
-      | Mod ->
-          let cat = Bitvector.concat [x; y] in
-          let divisor = Bitvector.extend z catsize in
-          if Bitvector.is_zeros divisor then
-              if Bitvector.equal cat divisor then
-                Bitvector.zeros size
-              else y
-          else
-              Bitvector.extract (Bitvector.umod cat divisor) {lo=0; hi=(size-1)}
+  let apply op x y z =
+    let _ = if (Bitvector.size_of x) != (Bitvector.size_of y) || (Bitvector.size_of y) != (Bitvector.size_of z) then failwith "Triop.apply: different sizes" in
+    let catsize = (Bitvector.size_of x) + (Bitvector.size_of y) in                                                                                                                                             
+    let size = (Bitvector.size_of z) in
+    match op with
+    | Div ->
+        if Bitvector.is_zeros z then
+            Bitvector.max_ubv size
+        else
+            Bitvector.extract (Bitvector.udiv (Bitvector.concat [x; y]) (Bitvector.extend z catsize)) ~lo:0 ~hi:(size-1)
+    | SDiv -> 
+        let cat = Bitvector.concat [x; y] in
+        if Bitvector.is_zeros z then
+            if Bitvector.sge cat (Bitvector.zeros catsize) then
+                Bitvector.max_ubv size
+            else Bitvector.ones size
+        else
+            Bitvector.extract (Bitvector.sdiv cat (Bitvector.extend_signed z catsize)) ~lo:0 ~hi:(size-1)
+    | Mod ->
+        let cat = Bitvector.concat [x; y] in
+        let divisor = Bitvector.extend z catsize in
+        if Bitvector.is_zeros divisor then
+            if Bitvector.equal cat divisor then
+              Bitvector.zeros size
+            else y
+        else
+            Bitvector.extract (Bitvector.umod cat divisor) ~lo:0 ~hi:(size-1)
+    | SMod -> 
+        let cat = Bitvector.concat [x; y] in
+        let divisor = Bitvector.extend_signed z catsize in
+        if Bitvector.is_zeros divisor then y
+        else
+          Bitvector.extract (Bitvector.smod cat divisor) ~lo:0 ~hi:(size-1)
+    | ITE -> if Bitvector.is_zeros x then z else y
+    | Im -> if Bitvector.is_ones x then y else z
 
-      | SMod -> 
-          let cat = Bitvector.concat [x; y] in
-          let divisor = Bitvector.extend_signed z catsize in
-          if Bitvector.is_zeros divisor then y
-          else
-            Bitvector.extract (Bitvector.smod cat divisor) {lo=0; hi=(size-1)}
-
-      | ITE -> if Bitvector.is_zeros x then z else y
-      | Im -> if (Bitvector.is_ones x) then y else z
+  let get_bitsz op bitsz1 bitsz2 bitsz3 =
+    match op with
+    | Div | SDiv | Mod | SMod -> 
+      assert (bitsz1 == bitsz2 && bitsz1 == bitsz3);
+      bitsz1
+    | ITE | Im -> 
+      assert (bitsz2 == bitsz3);
+      bitsz2
 end
 
-let select omega = omega.(Random.int (Array.length omega))
-
-module Mk_Unop (Oracle : Oracle.ORACLE) = struct
-  include Unop
-
-  let omega =
-    match Oracle.ops () with
-    | None -> Array.init Unop.number Unop.of_int
-    | Some ops ->
-        let unops = Array.of_list (List.filter_map of_string ops) in
-        if Array.length unops = 0 then [| of_int 0 |] else unops
-
-  let rand () =  select omega
-  let cardinal () = Array.length omega
+module Unop = struct
+  include UnopBase
+  include Extract (UnopBase)
 end
 
-module Mk_Binop (Oracle : Oracle.ORACLE) = struct
-  include Binop
-
-  let omega =
-    match Oracle.ops () with
-    | None -> Array.init number of_int
-    | Some ops ->
-      let binops = Array.of_list (List.filter_map of_string ops) in
-      if Array.length binops = 0 then [| of_int 0 |] else binops
-      
-  let rand () = select omega
-  let cardinal () = Array.length omega
+module Binop = struct
+  include BinopBase
+  include Extract (BinopBase)
 end
 
-module Mk_Triop (Oracle : Oracle.ORACLE) = struct
-  include Triop
-
-  let omega =
-    match Oracle.ops () with
-    | None -> Array.init number of_int
-    | Some ops ->
-      let binops = Array.of_list (List.filter_map of_string ops) in
-      if Array.length binops = 0 then [| of_int 0 |] else binops
-      
-  let rand () = select omega
-  let cardinal () = Array.length omega
+module Triop = struct
+  include TriopBase
+  include Extract (TriopBase)
 end

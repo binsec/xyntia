@@ -1,3 +1,24 @@
+(**************************************************************************)
+(*  This file is part of BINSEC.                                          *)
+(*                                                                        *)
+(*  Copyright (C) 2019-2026                                               *)
+(*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
+(*         alternatives)                                                  *)
+(*                                                                        *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
+(*  Lesser General Public License as published by the Free Software       *)
+(*  Foundation, version 2.1.                                              *)
+(*                                                                        *)
+(*  It is distributed in the hope that it will be useful,                 *)
+(*  but WITHOUT ANY WARRANTY; without even the implied warranty of        *)
+(*  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *)
+(*  GNU Lesser General Public License for more details.                   *)
+(*                                                                        *)
+(*  See the GNU Lesser General Public License version 2.1                 *)
+(*  for more details (enclosed in the file licenses/LGPLv2.1).            *)
+(*                                                                        *)
+(**************************************************************************)
+
 [@@@warning "-32"] (* Ignore the warning of unused function for the TS module *)
 open Xyntia_utils
 open OUnit2
@@ -7,7 +28,7 @@ module S = Simplifier.TreeSimplifier (T)
 
 module TS = struct
   include T
-  include Simplifier.MkShortcut (struct 
+  include Treeshortcut.Make (struct 
     type t = unit Tree.t
     include T
   end)
@@ -210,6 +231,9 @@ let suite =
 
     (* (-(1 | a)) ^ (1 | a) = -2 *)
     "xor_spe">:: TS.( (- (one || x0)) ^ (one || x0) ) --> minustwo;
+
+    (* Test with nested AC operators *)
+    "nested_ac">:: TS.( x0 && (x1 && (x0 && (x2 - (x3 - (x1 ^ (x2 ^ (x1 ^ x4))))))) ) --> TS.(x0 && x1 && (x2 - (x3 - (x2 ^ x4))));
   ]
   in
 

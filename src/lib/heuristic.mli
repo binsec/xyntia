@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -19,10 +19,13 @@
 (*                                                                        *)
 (**************************************************************************)
 
+type kind = ILS | RW | HC | MH | SA 
+
+(** Results summary i.e. what is returned by S-metaheuristics **)
 type summary = {
     success : bool ;
-    expression : string ;
-    simplified : string ;
+    expression : unit Tree.t ;
+    simplified : unit Tree.t ;
     smtlib : string ;
     size : int ;
     time_synthesis : float ;
@@ -34,6 +37,9 @@ module type S = sig
     val search : int -> summary
 end
 
+val kind_of_string : string -> kind
+
 (* Generates a search heuristics.
    The first VECDIST is the guiding distance while the second is the final one *)
 val of_string : (module Mutations.MUTATOR) -> (module Distance.VECDIST with type t = Mutations.mutd) -> (module Distance.VECDIST with type t = Mutations.mutd) -> (module Oracle.ORACLE) -> string -> (module S)
+val of_kind : (module Mutations.MUTATOR) -> (module Distance.VECDIST with type t = Mutations.mutd) -> (module Distance.VECDIST with type t = Mutations.mutd) -> (module Oracle.ORACLE) -> kind -> (module S)

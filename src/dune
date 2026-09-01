@@ -2,12 +2,29 @@
  (public_name xyntia)
  (package xyntia)
  (name main)
+ (modules main)
  (libraries
   unix
+  xyntia
   xyntia_utils
   binsec
-  binsec.smt
-  binsec.armv7decoder
-  binsec.amd64decoder
-  binsec.armv8decoder
-  binsec.ppc64decoder))
+  binsec.smtlib))
+
+(library
+ (name xyntia)
+ (modules xyntia)
+ (public_name xyntia)
+ (libraries unix xyntia_utils binsec binsec.smtlib
+ binsec.isa.armv7
+ binsec.isa.x86_32
+ binsec.isa.x86_64
+ binsec.isa.armv8
+ binsec.isa.ppc64
+ binsec.sse
+ binsec.symbolic
+ )
+ (flags
+  (:standard -open Binsec -open Binsec_sse -open Binsec_symbolic -open Yojson -w "-58")
+ )
+)
+

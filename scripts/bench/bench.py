@@ -60,6 +60,8 @@ def exec_xyntia(inifile, cmdargs, sampledir):
                 "-sampleout", sampledir,
                 "-bin", tmp.name,
                 "-config", inifile.name,
+                "-smt-timeout", 10,
+                "-quiet"
             ](retcode=[0, 124])
 
         else:
@@ -68,6 +70,8 @@ def exec_xyntia(inifile, cmdargs, sampledir):
                 "-sampleout", sampledir,
                 "-bin", tmp.name,
                 "-config", inifile.name,
+                "-smt-timeout", 10,
+                "-quiet"
             ].run()
         
         if not (sampledir / "res.json").exists():

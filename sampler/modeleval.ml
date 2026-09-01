@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -19,7 +19,13 @@
 (*                                                                        *)
 (**************************************************************************)
 
-open Libterm.Sexpr
+open Binsec_symbolic.Default
+module BiTbl = Basic_types.Integers.Bigint.Htbl
+module StTbl = Basic_types.String.Htbl
+module Bv = Binsec_base.Bitvector
+module BvTbl = Expr.Tbl
+module AsTbl = Symbol.Tbl
+
 
 (* Reimplementation of Libterm.Sexpr.eval to be able to read memory not only char by char but with a given size *)
 
@@ -30,11 +36,11 @@ let read_bytes =
       BiTbl.add cache addr byte;
       Bytes.set bits i byte)
     else
-      let byte = Bv.to_char (Bv.extract value { hi = 7; lo = 0 }) in
+      let byte = Bv.to_char (Bv.extract ~hi:7 ~lo:0 value) in
       BiTbl.add cache addr byte;
       Bytes.set bits i byte;
       fill_bytes cache
-        (Bv.extract value { hi = size - 1; lo = 8 })
+        (Bv.extract ~hi:(size-1) ~lo:8 value)
         (Z.add addr (Z.of_int succ))
         (size - 8) bits (i + 1) succ
   in
@@ -83,28 +89,28 @@ let rec eval
     ?(symbols =
       fun e -> Bitvector.create (Z.of_int (Expr.hash e)) (Expr.sizeof e))
     ?(memory = fun _ _ size _ -> Bv.zeros (size lsl 3))
-    ((vars, values, _, _, _) as m) = function
-  | Expr.Cst bv -> bv
+    ({symbols=vars; values; _} as m : Symbolic.Default.Model.t) (e : Symbolic.Default.Expr.t) = match e with
+  | Cst bv -> bv
   | e -> (
       try BvTbl.find values e
       with Not_found ->
         let value =
           match e with
-          | Expr.Cst _ -> assert false
-          | Expr.Var { name; _ } ->
+          | Cst _ -> assert false
+          | Var { name; _ } ->
               StTbl.add vars name e;
               symbols e
-          | Expr.Load { addr; len; dir; label; _ } ->
+          | Load { addr; len; dir; label; _ } ->
               eval_load ~symbols ~memory m
                 (eval ~symbols ~memory m addr)
                 len dir label
-          | Expr.Unary { f; x; _ } ->
+          | Unary { f; x; _ } ->
               Term.Bv.unary f (eval ~symbols ~memory m x)
-          | Expr.Binary { f; x; y; _ } ->
+          | Binary { f; x; y; _ } ->
               Term.Bv.binary f
                 (eval ~symbols ~memory m x)
                 (eval ~symbols ~memory m y)
-          | Expr.Ite { c; t; e; _ } ->
+          | Ite { c; t; e; _ } ->
               if Bv.zero = eval ~symbols ~memory m c then
                 eval ~symbols ~memory m e
               else eval ~symbols ~memory m t
@@ -112,16 +118,16 @@ let rec eval
         BvTbl.add values e value;
         value)
 
-and eval_load ~symbols ~memory ((_, _, cache, arrays, _) as t) ptr len dir
+and eval_load ~symbols ~memory ({ arrays; _} as t) ptr len dir
     (memory_term : Memory.t) =
   match memory_term with
-  | Root -> read_bytes memory memory_term ptr len dir cache
-  | Symbol n ->
+  (* | Root -> read_bytes memory memory_term ptr len dir cache *)
+  | Symbol _ as symb ->
       read_bytes memory memory_term ptr len dir
-        (try StTbl.find arrays n
+        (try AsTbl.find arrays symb
          with Not_found ->
            let arr = BiTbl.create 16 in
-           StTbl.add arrays n arr;
+           AsTbl.add arrays symb arr;
            arr)
   | Layer { addr; store; over; _ } ->
       let addr = eval ~symbols ~memory t addr in
@@ -135,6 +141,11 @@ and eval_load ~symbols ~memory ((_, _, cache, arrays, _) as t) ptr len dir
       in
       let bytes = Chunk.to_term (Store.select miss offset len store) in
       let bytes =
-        match dir with LittleEndian -> bytes | BigEndian -> bswap bytes
+        match dir with LittleEndian -> bytes | BigEndian -> Expr.byte_swap bytes
       in
       eval ~symbols ~memory t bytes
+
+  let copy_model ({symbols=vars; values; arrays} : Model.t) : Model.t =  
+      let arrays' = AsTbl.create (AsTbl.length arrays) in
+      AsTbl.iter (fun ar values -> AsTbl.add arrays' ar (BiTbl.copy values) ) arrays;
+      { symbols=(StTbl.copy vars); values=(BvTbl.copy values); arrays=arrays' }

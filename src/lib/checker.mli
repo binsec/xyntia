@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -22,18 +22,18 @@
 type equiv_answer = YES | NO | UKN
 
 type counter_example = {
-  inputs : (Oracle.variable * Bitvector.t) array;
-  output : Oracle.variable * Bitvector.t;
+  inputs : (Tree.variable * Bitvector.t) array;
+  output : Tree.variable * Bitvector.t;
 }
 
 module type CheckerType = sig
   val open_session : unit -> unit
   val close_session : unit -> unit
-  val check : string -> string -> equiv_answer
+  val check : Sampler.groundtruth -> string -> equiv_answer
   val get_counter_example : unit -> counter_example
 end
 
-module EquivChecker (O : Oracle.ORACLE) (Solver : Smt.Smt_sig.Solver) :
+module EquivChecker (O : Oracle.ORACLE) (S : sig val solver : Binsec.Smt_options.Solver.t val timeout : float end) () :
   CheckerType
 
 val answer_to_string : equiv_answer -> string

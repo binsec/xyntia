@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -39,6 +39,7 @@ module type MUTATIONS = sig
 end
 
 module Mk_Mutations (M : MUTATION_BASE) (O : Oracle.ORACLE) : MUTATIONS = struct
+
   let all_mut () =
     let consts = Array.map (fun x -> OP_Const x) (O.consts ()) in
     let vars = Array.map (fun x -> OP_Var x) (O.vars ()) in
@@ -331,9 +332,9 @@ module type MUTATOR = sig
 end
 
 module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
-  module Unop = Mk_Unop (O)
-  module Binop = Mk_Binop (O)
-  module Triop = Mk_Triop (O)
+  module Unop = Operators.Unop
+  module Binop = Operators.Binop
+  module Triop = Operators.Triop
   include M
 
   type data = mutd
@@ -360,7 +361,7 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
     in
     mk_const data c
 
-  let mk_const_of_bv bv = mk_const (O.const_of_bitv bv)
+  let mk_const_of_bv bv = mk_const (Tree.const_of_bitv bv)
 
   let mk_sizemod op t =
     let data = {
@@ -430,64 +431,58 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
   let get_random_left_choice (t : mutd) indice =
     let choices =
       match (t.last_mutation_indice, indice) with
+      | Some _, None -> assert false
+      | None, _ ->
+          t.all_choices
       | Some li, Some i ->
           if li < i then
-            let _ = t.last_mutation_indice <- indice in
             t.all_choices
           else t.left_choices
-      | None, Some _ ->
-          let _ = t.last_mutation_indice <- indice in
-          t.all_choices
-      | Some _, None -> assert false
-      | None, None -> t.all_choices
     in
+    t.last_mutation_indice <- indice;
     let size = Array.length choices in
     if size = 0 then None
     else
       let value = Random.int size in
       let res = choices.(value) in
       if Option.is_some indice then
+        (* Update the left choices, removing the selected choice *)
         t.left_choices <- Array.init (size - 1) (fun i -> if i < value then choices.(i) else choices.(i + 1));
       Some res
+
+  let random_var () = 
+    let vars = O.vars () in
+    let nvars = O.nvars () in
+    mk_var (vars.(Random.int nvars))
+
+  let random_const () = 
+    let consts = O.consts () in
+    let nconsts = O.nconsts () in
+    mk_const (consts.(Random.int nconsts))
 
   let random_terminal (bitsz : int) : mutd t =
     let nvars = O.nvars () in
     let nconsts = O.nconsts () in
     let choice = Random.int (nvars + nconsts) in
-    if choice < nvars then mk_terminal bitsz (mk_var (O.random_var ()))
-    else mk_terminal bitsz (mk_const (O.random_const ()))
+    let term = 
+      if choice < nvars then random_var () else random_const ()
+    in
+    mk_terminal bitsz term
 
   let terminal_from_const c (bitsz : int) = mk_terminal bitsz (mk_const c)
   let terminal_from_var v (bitsz : int) = mk_terminal bitsz (mk_var v)
     
   let random_unop ?op bitsz =
-    match op with
-    | Some operator -> mk_unop operator (random_terminal bitsz)
-    | None -> mk_unop (Unop.rand ()) (random_terminal bitsz)
+    let op = match op with | Some op -> op | None -> Unop.rand () in
+    mk_unop op (random_terminal bitsz)
 
   let random_binop ?op bitsz =
-    match op with
-    | Some operator ->
-        mk_binop operator 
-          (random_terminal bitsz) 
-          (random_terminal bitsz)
-    | None ->
-        mk_binop (Binop.rand ()) 
-          (random_terminal bitsz)
-          (random_terminal bitsz)
+    let op = match op with | Some op -> op | None -> Binop.rand () in
+    mk_binop op (random_terminal bitsz) (random_terminal bitsz)
 
   let random_triop ?op bitsz =
-    match op with
-    | Some operator ->
-        mk_triop operator 
-          (random_terminal bitsz)
-          (random_terminal bitsz)
-          (random_terminal bitsz)
-    | None ->
-        mk_triop (Triop.rand ())
-          (random_terminal bitsz)
-          (random_terminal bitsz)
-          (random_terminal bitsz)
+    let op = match op with | Some op -> op | None -> Triop.rand () in
+    mk_triop op (random_terminal bitsz) (random_terminal bitsz) (random_terminal bitsz)
 
   let rec is_terminal { node; _ } =
     match node with
@@ -504,12 +499,12 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
         else aux d id t'
       | Unop (op, t') ->
           if is_terminal t then mutate_leaf d t
-          else if id = t.sz then mutate_unop t
+          else if id = t.sz_no_mod then mutate_unop t
           else
             let tree = aux (d + 1) id t' in
             mk_unop op tree
       | Binop (op, t1, t2) ->
-          let rank = 1 + t1.sz in
+          let rank = 1 + t1.sz_no_mod in
           if id = rank then mutate_binop t
           else if id < rank then
             let tree = aux (d + 1) id t1 in
@@ -518,13 +513,13 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
             let tree = aux (d + 1) (id - rank) t2 in
             mk_binop op t1 tree
       | Triop (op, t1, t2, t3) ->
-          let rank = 1 + t1.sz in
+          let rank = 1 + t1.sz_no_mod in
           if id = rank then mutate_triop t
           else if id < rank then
             let tree = aux (d + 1) id t1 in
             mk_triop op tree t2 t3
-          else if id > rank + t2.sz then
-            let tree = aux (d + 1) (id - (rank + t2.sz)) t3 in
+          else if id > rank + t2.sz_no_mod then
+            let tree = aux (d + 1) (id - (rank + t2.sz_no_mod)) t3 in
             mk_triop op t1 t2 tree
           else
             let tree = aux (d + 1) (id - rank) t2 in
@@ -602,59 +597,59 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
           in
           recmutate t indice (max - 1) new_allowed
     in
-    let allowed_nodes = Array.init t.sz (( + ) 1) in
-    recmutate t indice t.sz allowed_nodes
+    let allowed_nodes = Array.init t.sz_no_mod (( + ) 1) in
+    recmutate t indice t.sz_no_mod allowed_nodes
 
   let cut t =
     let rec aux id t =
       match t.node with
       | Var _ | Const _ -> random_terminal t.bitsz
       | SizeMod (op, t') ->
-          if id = t.sz then random_terminal t.bitsz else mk_sizemod op (aux id t')
+          if id = t.sz_no_mod then random_terminal t.bitsz else mk_sizemod op (aux id t')
       | Unop (op, t') ->
-          if id = t.sz then random_terminal t.bitsz else mk_unop op (aux id t')
+          if id = t.sz_no_mod then random_terminal t.bitsz else mk_unop op (aux id t')
       | Binop (op, t1, t2) ->
-          let rank = 1 + t1.sz in
+          let rank = 1 + t1.sz_no_mod in
           if id = rank then random_terminal t.bitsz
           else if id < rank then mk_binop op (aux id t1) t2
           else mk_binop op t1 (aux (id - rank) t2)
       | Triop (op, t1, t2, t3) ->
-          let rank = 1 + t1.sz in
+          let rank = 1 + t1.sz_no_mod in
           if id = rank then random_terminal t.bitsz
           else if id < rank then mk_triop op (aux id t1) t2 t3
-          else if id > rank + t2.sz then
-            mk_triop op t1 t2 (aux (id - (rank + t2.sz)) t3)
+          else if id > rank + t2.sz_no_mod then
+            mk_triop op t1 t2 (aux (id - (rank + t2.sz_no_mod)) t3)
           else mk_triop op t1 (aux (id - rank) t2) t3
     in
-    aux (1 + Random.int t.sz) t
+    aux (1 + Random.int t.sz_no_mod) t
 
   let eval t = t.data.vals
 
   let singleton () : mutd t =
-    let { sz; _ } : Oracle.variable = O.out_var () in
+    let { sz; _ } : Tree.variable = O.out_var () in
     random_terminal sz
 
-    let to_string (t : mutd t) =
-      to_string (fun _ -> "") t
+  let to_string (t : mutd t) =
+    to_string (fun _ -> "") t
 
-    let to_smtlib (t : mutd t) =
-        let open Printf in
-        let rec aux t = 
-            match t.node with
-            | Var l -> l.name
-            | Const c -> 
-                let hexstr = (Bitvector.to_hexstring c.value) in
-                sprintf "#x%s"  (String.sub hexstr 2 ((String.length hexstr) -2))
-            | SizeMod (op, t) ->
-                SizeMod.to_sygus op (aux t) t.bitsz
-            | Unop (op, t) ->
-                Unop.to_sygus op (aux t) t.bitsz
-            | Binop (op, t1, t2) ->
-                Binop.to_sygus op (aux t1) t1.bitsz (aux t2) t2.bitsz
-            | Triop (op, t1, t2, t3) ->
-                Triop.to_sygus op (aux t1) t1.bitsz (aux t2) t2.bitsz (aux t3) t3.bitsz
-        in
-        aux t
+  let to_smtlib (t : mutd t) =
+    let open Printf in
+    let rec aux t = 
+      match t.node with
+      | Var l -> l.name
+      | Const c -> 
+          let hexstr = (Bitvector.to_hexstring c.value) in
+          sprintf "#x%s"  (String.sub hexstr 2 ((String.length hexstr) -2))
+      | SizeMod (op, t) ->
+          SizeMod.to_sygus op (aux t) t.bitsz
+      | Unop (op, t) ->
+          Unop.to_sygus op (aux t) t.bitsz
+      | Binop (op, t1, t2) ->
+          Binop.to_sygus op (aux t1) t1.bitsz (aux t2) t2.bitsz
+      | Triop (op, t1, t2, t3) ->
+          Triop.to_sygus op (aux t1) t1.bitsz (aux t2) t2.bitsz (aux t3) t3.bitsz
+      in
+      aux t
 
   let mutate_mh height_lim t _ =
     let num_terminals = O.nconsts () + O.nvars () in
@@ -664,7 +659,7 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
     let leaf_binop = 1.5 *. float (Binop.cardinal () * num_terminals) in
     let binop_leaf = inv leaf_binop in
     let leaf_triop = 1.5 *. float (Triop.cardinal () * num_terminals) in
-    assert (leaf_triop = 0.0);
+    let triop_leaf = inv leaf_triop in
     let rec aux d id t =
       match t.node with
       | Var _ | Const _ -> mutate_leaf d t
@@ -673,12 +668,12 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
         else aux d id t'
       | Unop (op, t') ->
           if is_terminal t then mutate_leaf d t
-          else if id = t.sz then mutate_unop t
+          else if id = t.sz_no_mod then mutate_unop t
           else
             let t', r = aux (d + 1) id t' in
             (mk_unop op t', r)
       | Binop (op, t1, t2) ->
-          let rank = 1 + t1.sz in
+          let rank = 1 + t1.sz_no_mod in
           if id = rank then mutate_binop t
           else if id < rank then
             let t1', r = aux (d + 1) id t1 in
@@ -686,7 +681,18 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
           else
             let t2', r = aux (d + 1) (id - rank) t2 in
             (mk_binop op t1 t2', r)
-      | Triop (_, _, _, _) -> assert false
+      | Triop (op, t1, t2, t3) -> 
+          let rank = 1 + t1.sz_no_mod in
+          if id = rank then mutate_triop t
+          else if id < rank then 
+            let t1', r = aux (d + 1) id t1 in
+            (mk_triop op t1' t2 t3,r)
+          else if id > rank + t2.sz_no_mod then
+            let t3', r = aux (d + 1) (id - rank - t2.sz_no_mod) t3 in
+            (mk_triop op t1 t2 t3',r)
+          else 
+            let t2', r = aux (d + 1) (id - rank) t2 in
+            (mk_triop op t1 t2' t3,r)
     and mutate_leaf d t =
       let choice = Random.int 3 in
       if d = height_lim || choice = 0 then (random_terminal t.bitsz, 1.)
@@ -706,11 +712,18 @@ module Mk_Mutator (O : Oracle.ORACLE) (M : MUTATIONS) : MUTATOR = struct
             (random_terminal t.bitsz, binop_leaf)
           else (mk_binop (Binop.rand ()) t1 t2, 1.)
       | _ -> assert false
+    and mutate_triop t =
+      match t.node with
+      | Triop (_, t1, t2, t3) ->
+          if is_terminal t1 && is_terminal t2 && is_terminal t3 && Random.bool () then
+            (random_terminal t.bitsz, triop_leaf)
+          else (mk_triop (Triop.rand ()) t1 t2 t3, 1.)
+      | _ -> assert false
     in
 
-    let t', r = aux 0 (1 + Random.int t.sz) t in
-    (t', r *. float t.sz /. float t'.sz)
+    let t', r = aux 0 (1 + Random.int t.sz_no_mod) t in
+    (t', r *. float t.sz_no_mod /. float t'.sz_no_mod)
 
-  let get_expr_size t = t.sz
+  let get_expr_size (t : 'a Tree.t) = t.sz
   let get_mutations () = (module M : MUTATIONS)
 end

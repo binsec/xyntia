@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -21,6 +21,11 @@
 
 module Bv = Bitvector
 
+type kind = LOGARITH | ARITH | XOR | HAMMING | SYNTIA
+
+type infrule =  MinOffset | Offset | MinMul | Mul | Mask | MaskOTF | MinXor | Xor | UDivX86 | UModX86 
+                | MinUShiftRight | UShiftRight | MinShiftLeft | ShiftLeft | Rotate | Affine | Poly2
+
 let is_zero x = abs_float x < 0.01
 
 module type DIST = sig
@@ -32,7 +37,7 @@ end
 module type VECDIST = sig
   type t
   val name : string
-  val vecdist : Bv.t array -> Bv.t array -> float
+  val vecdist : t Tree.t -> Bv.t array -> Bv.t array -> float
   val is_zero : float -> bool
   val extract : t Tree.t -> Bv.t array -> Bv.t array -> t Tree.t
 end
@@ -130,7 +135,7 @@ let vectorizeDist (type a) (dist_agg : float array -> float) (module D : DIST) (
   let module M = struct
     type t = T.data
     let name = D.name
-    let vecdist actual expected = Array.map2 D.dist actual expected |> dist_agg
+    let vecdist _ actual expected = Array.map2 D.dist actual expected |> dist_agg
     let extract tree _ _ = tree
     let is_zero = D.is_zero
   end in
@@ -139,7 +144,7 @@ let vectorizeDist (type a) (dist_agg : float array -> float) (module D : DIST) (
 (* TODO : For now, we use dist_vec, but we should parametrize
           the way we aggregate distance along the (output,expected) vector
 *)
-module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = struct
+module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) (MU : Mutations.MUTATIONS) = struct
   open Operators
 
   let always_0 vector = Array.fold_left Bv.logor vector.(0) vector
@@ -149,7 +154,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
 
 
   let add_binop_cst_pattern op tree constant =
-    if Binop.neutral_element op constant then 
+    if Binop.is_neutral_element op ~dir:(Right ()) constant  then 
       tree
     else
       M.mk_binop op tree (M.mk_const_of_bv constant)
@@ -175,7 +180,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
   module Offset = struct
     type t = M.data
     let name = "offset-" ^ D.name
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let c = Bv.sub expected.(0) actual.(0) in
       let f act exp = D.dist exp (Bv.add act c) in
       Array.map2 f actual expected |> dist_vec
@@ -190,7 +195,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
   module MinOffset = struct
     type t = M.data
     let name = "min-offset-" ^ D.name
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let consts = Array.map2 Bv.sub expected actual |> Array.to_list in
       let dist v =
         let m = Array.map (fun x -> Bv.add v x) actual in
@@ -210,7 +215,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "xor-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let c = Bv.logxor expected.(0) actual.(0) in
       let f act exp = D.dist exp (Bv.logxor act c) in
       Array.map2 f actual expected |> dist_vec
@@ -225,7 +230,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "min-xor-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let constants =
         Array.map2 Bv.logxor actual expected |> Array.to_list
       in
@@ -258,7 +263,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     (** Mask the result **)
     let mask x = Bv.logor (Bv.logand x andmask) ormask
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let maskedoutputs = Array.map mask actual in
       Array.map2 D.dist maskedoutputs expected |> dist_vec
 
@@ -286,7 +291,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
       let mask x = Bv.logor (Bv.logand x mask_and) mask_or in
       mask
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let mask_otf = masked_outputs_otf actual in
       let maskedoutputs = Array.map mask_otf actual in
       Array.map2 D.dist maskedoutputs expected |> dist_vec
@@ -301,7 +306,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "shiftleft-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let al0 = always_0 actual in
       let c = max (Bv.trailing_zeros always_0_expected - Bv.trailing_zeros al0) 0 in
       let f act exp = D.dist exp (Bv.shift_left act c) in
@@ -319,7 +324,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "min-shiftleft-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let constants = List.init (Bv.size_of actual.(0)) Fun.id in
 
       let dist c =
@@ -341,7 +346,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "ushiftright-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let al0 = always_0 actual in
       let c = max (Bv.leading_zeros always_0_expected - Bv.leading_zeros al0) 0 in
       let f act exp = D.dist exp (Bv.shift_right act c) in
@@ -359,7 +364,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "min-ushiftright-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let constants = List.init (Bv.size_of actual.(0)) Fun.id in
 
       let dist c =
@@ -396,7 +401,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
       | None -> Bv.ones (Bv.size_of expected.(0))
       | Some (e_x, e_star_x) -> inverse_odd e_x e_star_x
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let c = get_scalar_constant actual expected in
       let f a = Bv.mul a c in
       let new_output = Array.map f actual in
@@ -434,13 +439,119 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
       in
       find_constant (Array.to_list actual) (Array.to_list expected)
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       if actual = expected then 0.0
       else
         let (_, cost) = min_get_scalar_constant actual expected in
         cost
 
     let extract tree actual expected = Mul.extract tree actual expected
+  end
+
+  module UDivX86 = struct
+    type t = M.data
+    let name = "udivx86-" ^ D.name
+    let is_zero = D.is_zero
+
+    (* How it works :
+        if expected(i) = e(i) / b, then
+        q = e(i) / expected(i) \in [b, 2b[, i.e. b \in [q/2, q]
+        thus, we can intersect this interval for all pair (actual, expected)
+        and find the largest interval where this property is respected by everyone
+        Finally, we retrieve the constant in the middle of the interval 
+        (as every constant is equivalent for our pairs but it may improve the CEGIS loop)
+      Note that, if the final interval is empty, we use the constant 1. 
+    *)
+    let get_divisor actual expected =
+      let bvsize = Bv.size_of expected.(0) in
+      let bvone = Bv.ones bvsize in
+      let cmb = Array.combine actual expected in
+      let (min_interval, max_interval) = Array.fold_left (fun (interval_min, interval_max) (act, exp) -> 
+        if Bv.is_zeros exp then (
+          let minb = Bv.umax (Bv.add act bvone) interval_min in
+          (minb, interval_max)
+        ) else (
+          let q = Bv.udiv act exp in
+          let minb = Bv.umax q interval_min in
+          let maxb = Bv.umin q interval_max in
+          (minb, maxb))
+      ) (Bv.zeros bvsize, Bv.max_ubv bvsize) cmb
+      in
+      (* Format.eprintf "%a, %a" Bv.pp_hex min_interval Bv.pp_hex max_interval; *)
+      if Bv.ugt min_interval max_interval then
+        Bv.ones bvsize
+      else (
+        let c = Bv.( udiv (add min_interval max_interval) (of_int ~size:bvsize 2) ) in
+        if Bv.is_zeros c then Bv.ones bvsize
+        else c 
+      )
+      
+    let vecdist _ actual expected =
+      let c = get_divisor actual expected in 
+      (* Format.eprintf " : %a\n" Bv.pp_hex c;
+      Format.pp_print_flush Format.err_formatter (); *)
+      let f x = Bv.udiv x c in
+      let new_output = Array.map f actual in
+      Array.map2 D.dist new_output expected |> dist_vec
+
+    let extract tree actual expected =
+      let c = get_divisor actual expected in 
+      (* Format.eprintf " : %a (extract)\n" Bv.pp_hex c;
+      Format.pp_print_flush Format.err_formatter (); *)
+      add_binop_cst_pattern Div_x86 tree c
+  end
+
+  module UModX86 = struct
+    type t = M.data
+    let name = "umodx86-" ^ D.name
+    let is_zero = D.is_zero
+
+    (* How it works : 3 conditions on c (the constant we search)
+      (1) c > expected(i)
+      (2) expected(i) <= actual(i)
+      (3) actual(i) - expected(i) = 0 [c] 
+      
+      The third condition gives us that c \in divisor(pgcd(actual(i) - expected(i)))
+      (we will take the maximal value)
+    *)
+    let get_cst actual expected =
+      let bvsize = Bv.size_of expected.(0) in
+      let length = Array.length actual in
+      let rec loop (acc : Z.t option) i =
+        if i >= length then acc
+        else if Bv.ugt expected.(i) actual.(i) then None
+        else (
+          let delta = Bv.value_of (Bv.sub actual.(i) expected.(i)) in
+          match acc with
+          | None -> loop (Some delta) (i+1) 
+          | Some acc -> loop (Some (Z.gcd acc delta)) (i+1) 
+        )
+      in
+      match loop None 0 with
+      | None -> None
+      | Some c -> 
+        let c = Bv.create c bvsize in
+        if Array.for_all (fun x -> Bv.ugt c x) expected then
+          Some c
+        else None
+
+      
+    let vecdist _ actual expected =
+      match get_cst actual expected with
+      | Some c -> 
+        let f x = Bv.umod x c in
+        let new_output = Array.map f actual in
+        Array.map2 D.dist new_output expected |> dist_vec
+      | None ->
+        Array.map2 D.dist actual expected |> dist_vec
+
+
+    let extract tree actual expected =
+      match get_cst actual expected with
+      | Some c -> 
+        add_binop_cst_pattern Mod_x86 tree c 
+      | None ->
+        tree
   end
 
   let find_rotations bva bve =
@@ -462,7 +573,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "rotate-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let new_ror d a = Bv.rotate_right a d in
       let sz = Bv.size_of actual.(0) in
 
@@ -539,7 +650,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
 
     type input_row_type = 
     | Zeros
-    | SingleVar of Oracle.variable
+    | SingleVar of Tree.variable
     | FullOne
     | Other
 
@@ -586,7 +697,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
       assert (Option.is_some !zero_sample);
       assert (Option.is_some !fullone_sample);
       assert (List.length !other_samples > 0);
-      Array.iter (fun (v : Oracle.variable) -> 
+      Array.iter (fun (v : Tree.variable) -> 
         assert (Option.is_some (SMap.find_opt v.name !var_map))
       ) (O.vars ());
       Option.get !zero_sample, !var_map, Option.get !fullone_sample, List.rev !other_samples
@@ -664,7 +775,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
 
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let vars = O.vars () in
       let alpha = compute_alpha actual expected in
       let beta = compute_beta actual expected alpha in
@@ -690,7 +801,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
       let coefs = compute_vcoefs actual expected alpha beta in
       let tree = add_pattern_offset (add_pattern_scalar tree alpha) beta
       in
-      Array.fold_left (fun t (var : Oracle.variable) ->
+      Array.fold_left (fun t (var : Tree.variable) ->
         let coef = SMap.find var.name coefs in
         add_pattern_linvar t coef var
       ) tree vars
@@ -729,7 +840,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "affine-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let (alpha, beta) = find_affine_coefficients actual expected in
       let f act exp = D.dist exp (Bv.add (Bv.mul act alpha) beta) in
       Array.map2 f actual expected |> dist_vec
@@ -744,7 +855,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
     let name = "byteswap-" ^ D.name
     let is_zero = D.is_zero
 
-    let vecdist actual expected =
+    let vecdist _ actual expected =
       let d1 = Array.map2 D.dist actual expected |> dist_vec in
       let f act exp = D.dist exp (Bitvector.byteswap act) in
       let d2 = Array.map2 f actual expected |> dist_vec in
@@ -876,7 +987,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
           let (a1, a0) = find_affine_coefficients actual expected in
           (Bv.ones (Bv.size_of actual.(0)), a1, a0)
 
-      let vecdist actual expected = 
+      let vecdist _ actual expected = 
         let (a2, a1, a0) = get_coefs actual expected in
         let f act exp = D.dist exp Bv.(add (mul a2 (mul act act)) (add (mul act a1) a0)) in
         Array.map2 f actual expected |> dist_vec
@@ -890,6 +1001,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) = s
         |> M.mk_binop Add (M.mk_binop Mul (M.mk_const_of_bv a1) tree)
         |> M.mk_binop Add (M.mk_const_of_bv a0)
   end
+
 end
 
 module CombineVecDist (Vs : sig
@@ -904,20 +1016,20 @@ struct
     if String.equal acc String.empty then V.name
     else acc ^ "-" ^ V.name) "" Vs.dists
 
-  let vecdist actual expected =
+  let vecdist tree actual expected =
     match Vs.dists with
     | [] -> failwith "Combining an empty list of vector distances"
     | (module V1 : VD) :: t ->
         List.fold_left
           (fun acc (module V : VD) ->
-            Vs.combinator acc (V.vecdist actual expected))
-          (V1.vecdist actual expected)
+            Vs.combinator acc (V.vecdist tree actual expected))
+          (V1.vecdist tree actual expected)
           t
 
   let extract tree actual expected =
     let (module V : VD) =
       List.find
-        (fun (module V : VD) -> V.is_zero (V.vecdist actual expected))
+        (fun (module V : VD) -> V.is_zero (V.vecdist tree actual expected))
         Vs.dists
     in
     V.extract tree actual expected
@@ -925,28 +1037,54 @@ struct
   let is_zero x = List.exists (fun (module V : VD) -> V.is_zero x) Vs.dists
 end
 
+let str_to_infrule str = match str with 
+| "+" -> MinOffset
+| "+_l" -> Offset
+| "*" -> MinMul
+| "*_l" -> Mul
+| "mask" -> Mask
+| "maskotf" -> MaskOTF
+| "^" -> MinXor
+| "^_l" -> Xor
+| "/x86" -> UDivX86
+| "%x86" -> UModX86
+| ">>u" -> MinUShiftRight
+| ">>u_l" -> UShiftRight
+| "<<" -> MinShiftLeft
+| "<<_l" -> ShiftLeft
+| "ror" -> Rotate
+| "affine" -> Affine
+| "poly2" -> Poly2
+| _ -> failwith (Format.sprintf "Unkown inference rule: '%s'" str)
 
-let infrules_of_str (type a) str (module D : DIST) (module O : Oracle.ORACLE) (module T : Tree.TreeConstructor with type data = a) : (module VECDIST with type t = a) list = 
-  let module GMC = GuideModCst (D) (O) (T) in
-  let aux : string -> (module VECDIST with type t = a) = function
-  | "+" -> (module GMC.MinOffset)
-  | "+_l" -> (module GMC.Offset)
-  | "*" -> (module GMC.MinMul)
-  | "*_l" -> (module GMC.Mul)
-  | "mask" -> (module GMC.Mask)
-  | "maskotf" -> (module GMC.MaskOTF)
-  | "^" -> (module GMC.MinXor)
-  | "^_l" -> (module GMC.Xor)
-  | ">>u" -> (module GMC.MinUShiftRight)
-  | ">>u_l" -> (module GMC.UShiftRight)
-  | "<<" -> (module GMC.MinShiftLeft)
-  | "<<_l" -> (module GMC.ShiftLeft)
-  | "ror" -> (module GMC.Rotate)
-  | "affine" -> (module GMC.Affine)
-  | "poly2" -> (module GMC.Poly2)
-  | _ -> failwith (Format.sprintf "Unkown inference rule: '%s'" str)
+let create_infrules (type a) l (module D : DIST) (module O : Oracle.ORACLE) 
+  (module T : Tree.TreeConstructor with type data = a) (module MU : Mutations.MUTATIONS) : (module VECDIST with type t = a) list = 
+  let module GMC = GuideModCst (D) (O) (T) (MU) in
+  let aux : infrule -> (module VECDIST with type t = a) = function
+  | MinOffset -> (module GMC.MinOffset)
+  | Offset -> (module GMC.Offset)
+  | MinMul -> (module GMC.MinMul)
+  | Mul -> (module GMC.Mul)
+  | Mask -> (module GMC.Mask) 
+  | MaskOTF -> (module GMC.MaskOTF)
+  | MinXor -> (module GMC.MinXor)
+  | Xor -> (module GMC.Xor)
+  | UDivX86 -> (module GMC.UDivX86)
+  | UModX86 -> (module GMC.UModX86)
+  | MinUShiftRight -> (module GMC.MinUShiftRight)
+  | UShiftRight -> (module GMC.UShiftRight)
+  | MinShiftLeft -> (module GMC.MinShiftLeft)
+  | ShiftLeft -> (module GMC.ShiftLeft)
+  | Rotate -> (module GMC.Rotate)
+  | Affine -> (module GMC.Affine)
+  | Poly2 -> (module GMC.Poly2)
   in
-  match str with
-  | "mba" -> List.map aux ["+"; "maskotf"; "<<"; "*"; "^"]
-  | "all" -> List.map aux ["+"; "maskotf"; "<<"; ">>u"; "*"; "^"; "ror"; "poly2"; "affine"]
-  | _ -> [aux str]
+  List.map aux l
+
+let kind_of_str s = match s with
+| "arith" -> ARITH 
+| "logarith" -> LOGARITH
+| "xor" -> XOR
+| "hamm" -> HAMMING
+| "syntia" -> SYNTIA
+| _ -> failwith (Printf.sprintf "Unknown heurisitic: %s" s) 

@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -21,16 +21,19 @@
 
 open Operators
 
+type variable = { name : string ; sz : int }
+type constant = { name : string ; value : Bitvector.t }
+
 type op_t =
-  | OP_Var of Oracle.variable
-  | OP_Const of Oracle.constant
+  | OP_Var of variable
+  | OP_Const of constant
   | OP_Unop of unop_t
   | OP_Binop of binop_t
   | OP_Triop of triop_t
 
 type 'a node =
-  | Var of Oracle.variable
-  | Const of Oracle.constant
+  | Var of variable
+  | Const of constant
   | SizeMod of sizemod_t * 'a t
   | Unop of unop_t * 'a t
   | Binop of binop_t * 'a t * 'a t
@@ -38,12 +41,17 @@ type 'a node =
 
 and 'a t = {
   node : 'a node;
-  (* number of nodes in this subtree, size modifiers do not count *)
+  (* Number of nodes with size modifiers *)
   sz : int;
+  (* number of nodes in this subtree, size modifiers do not count *)
+  sz_no_mod : int;
   (* bitsize of the values calculated by this tree *)
   bitsz : int;
   data : 'a;
 }
+
+let eq_var (v1 : variable) (v2 : variable) =
+  String.equal v1.name v2.name
 
 let compare t1 t2 =
   let to_int = function
@@ -55,68 +63,34 @@ let compare t1 t2 =
   | Triop _ -> 5
   in
   let rec aux t1 t2 =
+    let if_eq t1' t2' cmp =
+      match cmp with | 0 -> aux t1' t2' | _ -> cmp
+    in
     match t1.node, t2.node with
     | Var v1, Var v2 -> String.compare v1.name v2.name
     | Const c1, Const c2 -> Bitvector.compare c1.value c2.value
     | SizeMod (op1,t1'), SizeMod (op2, t2') -> (
-      match SizeMod.compare op1 op2 with
-      | 0 -> aux t1' t2'
-      | x -> x)
+        SizeMod.compare op1 op2
+        |> if_eq t1' t2'
+      )
     | Unop (op1,t1'), Unop (op2, t2') -> (
-      match Unop.compare op1 op2 with
-      | 0 -> aux t1' t2'
-      | x -> x)
+        Unop.compare op1 op2
+        |> if_eq t1' t2'
+      )
     | Binop (op1, t11, t12), Binop (op2, t21, t22) -> (
-      match Binop.compare op1 op2 with
-      | 0 -> (
-        match aux t11 t21 with
-        | 0 -> aux t12 t22
-        | x -> x
-        )
-      | x -> x
+        Binop.compare op1 op2
+        |> if_eq t11 t21
+        |> if_eq t12 t22
     )
     | Triop (op1, t11, t12, t13), Triop (op2, t21, t22, t23) -> (
-      match Triop.compare op1 op2 with
-      | 0 -> (
-        match aux t11 t21 with
-        | 0 -> (
-          match aux t12 t22 with
-          | 0 -> aux t13 t23
-          | x -> x
-        )
-        | x -> x
-        )
-      | x -> x
+        Triop.compare op1 op2
+        |> if_eq t11 t21
+        |> if_eq t12 t22
+        |> if_eq t13 t23
     )
     | _, _ -> Int.compare (to_int t1.node) (to_int t2.node)
   in
   aux t1 t2
-
-let _fold_topdown (f : 'a t -> 'b -> 'b) (tree : 'a t) (x : 'b) =
-  let rec aux t x =
-    let x = f t x in
-    match t.node with
-    | Const _ | Var _ -> x
-    | SizeMod (_, t1) -> aux t1 x
-    | Unop (_, t1) -> aux t1 x
-    | Binop (_, t1, t2) -> aux t2 (aux t1 x) 
-    | Triop (_, t1, t2, t3) -> aux t3 (aux t2 (aux t1 x))
-  in
-  aux tree x
-
-let _fold_bottomup (f : 'a t -> 'b -> 'b) (tree : 'a t) (x : 'b) =
-  let rec aux t x =
-    let y =
-      match t.node with
-      | Const _ | Var _ -> x
-      | SizeMod (_, t1) -> aux t1 x
-      | Unop (_, t1) -> aux t1 x
-      | Binop (_, t1, t2) -> aux t2 (aux t1 x) 
-      | Triop (_, t1, t2, t3) -> aux t3 (aux t2 (aux t1 x))
-    in
-    f t y
-  in
-  aux tree x
 
 let rec tree_equal t1 t2 =
   if t1.sz != t2.sz then false
@@ -145,7 +119,10 @@ let to_string f (t : 'a t) =
     | SizeMod (op, t) -> sprintf "%s (%s)%s" (SizeMod.to_string op) (aux t) (f t.data)
     | Unop (op, t) -> sprintf "%s (%s)%s" (Unop.to_string op) (aux t) (f t.data)
     | Binop (op, t1, t2) ->
-        sprintf "(%s %s %s)%s" (aux t1) (Binop.to_string op) (aux t2) (f t.data)
+        if Binop.is_infix op then
+          sprintf "(%s %s %s)%s" (aux t1) (Binop.to_string op) (aux t2) (f t.data)
+        else
+          sprintf "(%s %s %s)%s" (Binop.to_string op) (aux t1) (aux t2) (f t.data) 
     | Triop (op, t1, t2, t3) -> (
         match op with
         | Div | SDiv | Mod | SMod ->
@@ -157,10 +134,35 @@ let to_string f (t : 'a t) =
   in
   aux t
 
+let string_of t = to_string (fun _ -> "") t 
+
+let var_of name sz : variable = { name; sz}
+
+let const_of_bitv bv = 
+  let name = Bitvector.to_string bv in
+  {name; value=bv}
+
+let const_of_int value size = 
+  let bv = Bitvector.of_int ~size value in
+  const_of_bitv bv
+
+let get_vars t =
+  let res = Hashtbl.create 0 in 
+  let rec aux t = match t.node with
+  | Var v -> Hashtbl.add res v ()
+  | Const _ -> ()
+  | SizeMod (_, t) | Unop (_, t) -> aux t
+  | Binop (_, t1, t2) -> aux t1; aux t2
+  | Triop (_, t1, t2, t3) -> aux t1; aux t2; aux t3
+  in
+  aux t;
+  Hashtbl.fold (fun key _ acc -> key::acc) res []
+
 let mk_var data var =
   { 
     node = Var var;
     sz = 1;
+    sz_no_mod = 1;
     bitsz = var.sz;
     data 
   }
@@ -169,6 +171,7 @@ let mk_const data c =
   { 
     node = Const c;
     sz = 1;
+    sz_no_mod = 1;
     bitsz = Bitvector.size_of c.value;
     data 
   }
@@ -177,23 +180,23 @@ let mk_const_of_bv data bv =
   mk_const data { name = Bitvector.to_string bv; value = bv }
 
 let mk_sizemod data op t =
-  let sz, bitsz =
+  let bitsz =
     match op with
-    | Sextend x | Extend x | Reduce x -> (t.sz, x)
+    | Sextend x | Extend x | Reduce x -> x
   in
   { 
     node = SizeMod (op, t);
-    sz;
+    sz = t.sz + 1;
+    sz_no_mod = t.sz_no_mod;
     bitsz;
     data
   }
 let mk_unop data op t =
-  let sz, bitsz = (t.sz + 1, t.bitsz)
-  in
   { 
     node = Unop (op, t);
-    sz;
-    bitsz;
+    sz_no_mod = t.sz_no_mod + 1;
+    sz = t.sz + 1;
+    bitsz = Unop.get_bitsz op t.bitsz;
     data
   }
 
@@ -201,7 +204,8 @@ let mk_binop data op t1 t2 =
   { 
     node = Binop (op, t1, t2); 
     sz = 1 + t1.sz + t2.sz; 
-    bitsz = t1.bitsz; 
+    sz_no_mod = 1 + t1.sz_no_mod + t2.sz_no_mod; 
+    bitsz = Binop.get_bitsz op t1.bitsz t2.bitsz;
     data
   }
 
@@ -209,18 +213,32 @@ let mk_triop data op t1 t2 t3 =
   {
     node = Triop (op, t1, t2, t3);
     sz = 1 + t1.sz + t2.sz + t3.sz;
-    bitsz = t2.bitsz;
-    (* NB: We should check that t2.bitsz == t3.bitsz in the ITE and Im case *)
+    sz_no_mod = 1 + t1.sz_no_mod + t2.sz_no_mod + t3.sz_no_mod;
+    bitsz = Triop.get_bitsz op t1.bitsz t2.bitsz t3.bitsz;
     data;
   }
+
+(* Replace var in t by repl *)
+let replace_var t (var: variable) repl =  
+  let rec aux t = match t.node with
+  | Var v -> 
+    if String.equal var.name v.name then repl
+    else t
+  | Const _ -> t
+  | SizeMod (op, t1) -> mk_sizemod t.data op (aux t1)  
+  | Unop (op, t1) -> mk_unop t.data op (aux t1) 
+  | Binop (op, t1, t2) -> mk_binop t.data op (aux t1) (aux t2) 
+  | Triop (op, t1, t2, t3) -> mk_triop t.data op (aux t1) (aux t2) (aux t3)
+  in
+  aux t
 
 module type TreeConstructor = sig
   type data
   type t' := data t 
 
   (* Specialized Constructor *)
-  val mk_var : Oracle.variable -> t'
-  val mk_const : Oracle.constant -> t'
+  val mk_var : variable -> t'
+  val mk_const :constant -> t'
   val mk_const_of_bv : Bitvector.t -> t'
   val mk_sizemod : sizemod_t -> t' -> t'
   val mk_unop : unop_t -> t' -> t'
@@ -249,16 +267,16 @@ module UnitTreeConstructor = struct
   (* A specialized version that handles commutative
      operators (which helps to ensure maximal sharing) *)
   let hashcons_binop x =
-  match x.node with
-  | Binop (op, t1, t2) when Operators.Binop.is_commut op -> (
-      try H.find table x
-      with Not_found -> (
-        let x' = mk_binop () op t2 t1 in
-        try H.find table x'
-        with Not_found ->
-          H.add table x x;
-          x))
-  | _ -> hashcons x
+    match x.node with
+    | Binop (op, t1, t2) when Operators.Binop.is_commut op -> (
+        try H.find table x
+        with Not_found -> (
+          let x' = mk_binop () op t2 t1 in
+          try H.find table x'
+          with Not_found ->
+            H.add table x x;
+            x))
+    | _ -> hashcons x
 
   (* Specialized Constructor *)
   let mk_var s = hashcons (mk_var () s)
@@ -283,40 +301,32 @@ module UnitTreeConstructor = struct
     | Triop _ -> 5
     in
   let rec aux t1 t2 =
+    let if_eq t1' t2' cmp =
+      match cmp with | 0 -> aux t1' t2' | _ -> cmp
+    in
     if t1 == t2 then 0
     else (
       match t1.node, t2.node with
       | Var v1, Var v2 -> String.compare v1.name v2.name
       | Const c1, Const c2 -> Bitvector.compare c1.value c2.value
       | SizeMod (op1,t1'), SizeMod (op2, t2') -> (
-        match SizeMod.compare op1 op2 with
-        | 0 -> aux t1' t2'
-        | x -> x)
+        SizeMod.compare op1 op2
+        |> if_eq t1' t2'
+      )
       | Unop (op1,t1'), Unop (op2, t2') -> (
-        match Unop.compare op1 op2 with
-        | 0 -> aux t1' t2'
-        | x -> x)
+        Unop.compare op1 op2
+        |> if_eq t1' t2'
+      )
       | Binop (op1, t11, t12), Binop (op2, t21, t22) -> (
-        match Binop.compare op1 op2 with
-        | 0 -> (
-          match aux t11 t21 with
-          | 0 -> aux t12 t22
-          | x -> x
-          )
-        | x -> x
+        Binop.compare op1 op2
+        |> if_eq t11 t21
+        |> if_eq t12 t22
       )
       | Triop (op1, t11, t12, t13), Triop (op2, t21, t22, t23) -> (
-        match Triop.compare op1 op2 with
-        | 0 -> (
-          match aux t11 t21 with
-          | 0 -> (
-            match aux t12 t22 with
-            | 0 -> aux t13 t23
-            | x -> x
-          )
-          | x -> x
-          )
-        | x -> x
+        Triop.compare op1 op2
+        |> if_eq t11 t21
+        |> if_eq t12 t22
+        |> if_eq t13 t23
       )
       | _, _ -> Int.compare (to_int t1.node) (to_int t2.node)
     )
@@ -335,4 +345,5 @@ module UnitTreeConstructor = struct
       mk_binop op (transfer t1) (transfer t2)
     | Triop (op,t1,t2,t3) ->
       mk_triop op (transfer t1) (transfer t2) (transfer t3)
+
 end

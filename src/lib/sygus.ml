@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -95,7 +95,7 @@ module SyGusPrinter (O: Oracle.ORACLE) (MU : Mutations.MUTATIONS) = struct
     assert (Array.length invars == nvars);
     
     (* Create (synth-fun ...)*)
-    let synth_fun = (Array.fold_left (fun acc (var : Oracle.variable) -> 
+    let synth_fun = (Array.fold_left (fun acc (var : Tree.variable) -> 
       let n = sprintf " (%s (_ BitVec %d)) " var.name var.sz in
       acc ^ n
     ) "(synth-fun f (" invars) ^ sprintf ") (_ BitVec %d)\n" osize in
@@ -106,7 +106,7 @@ module SyGusPrinter (O: Oracle.ORACLE) (MU : Mutations.MUTATIONS) = struct
       (* ^
       (sprintf "\t(%s (_ BitVec %d))\n" (nonterm_of_size osize) osize)  *)
     in
-    let input_sizes = Array.fold_left (fun acc (var : Oracle.variable) -> 
+    let input_sizes = Array.fold_left (fun acc (var : Tree.variable) -> 
       let sz = var.sz in  
       if List.mem sz acc then acc
       else sz::acc
@@ -134,6 +134,18 @@ module SyGusPrinter (O: Oracle.ORACLE) (MU : Mutations.MUTATIONS) = struct
     in
 
     let rules = rules ^ glue ^ "))\n" in
+
+    (* add comments about variable ordering*)
+    let comment = 
+        (* out var*)
+        Printf.sprintf ";out: %s<%d>\n" ovar.name osize ^
+        (* in vars*)
+        let acc, _ = (Array.fold_left (fun (acc,idx) (var : Tree.variable) -> 
+          let n = sprintf ";v%d: %s<%d>" idx var.name var.sz in
+          (acc ^ n ^ "\n", idx + 1)
+        ) ("",0) invars) 
+        in acc
+    in
     
     (* Add samples *)
     let samples = Array.init (O.nsamples ()) (fun i -> 
@@ -150,7 +162,5 @@ module SyGusPrinter (O: Oracle.ORACLE) (MU : Mutations.MUTATIONS) = struct
     let samples = (Array.fold_left (fun acc s -> acc ^ "\n" ^ s) "" samples) ^ "\n" in
 
     let checksynth = "(check-synth)" in
-    "(set-logic BV)\n" ^ synth_fun ^ decl ^ rules ^ samples ^ checksynth
+    "(set-logic BV)\n" ^ synth_fun ^ decl ^ rules ^ comment ^ samples ^ checksynth
 end
-  
-  

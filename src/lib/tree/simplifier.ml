@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -22,60 +22,42 @@
 open Tree
 open Operators
 
-module MkShortcut (C : sig
-    type t
-
-    val mk_sizemod : sizemod_t -> t -> t
-    val mk_unop : unop_t -> t -> t
-    val mk_binop : binop_t -> t -> t -> t
-    val mk_triop : triop_t -> t -> t -> t -> t
-  end) = struct
-    open C
-    let (~.) = mk_unop Not
-    let (~-) = mk_unop Minus
-
-    let (+) = mk_binop Add 
-    let (-) = mk_binop Sub 
-    let ( * ) = mk_binop Mul 
-    let ( && ) = mk_binop And 
-    let ( || ) = mk_binop Or 
-    let (^) = mk_binop Xor
-    let (>>) = mk_binop RShiftu
-    let (<<) = mk_binop LShift
-    let (>>-) = mk_binop RShifts
-    let rot = mk_binop RotateRight
-    let (/) = mk_binop Div_x86
-    let (/-) = mk_binop SDiv_x86
-    let (%) = mk_binop Mod_x86
-    let (%-) = mk_binop SMod_x86
-    let (>>%) = mk_binop RShiftu_x86
-    let (<<%) = mk_binop LShift_x86
-    let (>>-%) = mk_binop RShifts_x86
-
-    let umax = mk_binop UMax
-    let umin = mk_binop UMin
-    let smax = mk_binop SMax
-    let smin = mk_binop SMin
-end
-[@@warning "-32"] (* Silence the non usage of mk_sizemod and mk_triop *)
-
-
+(**
+  The [Pattern] module provides the tools to perform
+  a match and rewrite algorithm on the trees as well
+  as some helper functions / syntaxic sugar to ease
+  its usage
+*)
 module Pattern = struct
-  [@warning "-32"] (* Ignore the warning of unused function for this module *)
+  [@warning "-32"] 
+  (* Ignore the warning of unused function for this module *)
   module C = UnitTreeConstructor (* This constructor uses hashconsing, allowing very fast tree equality check *)
 
+
+  type tree = C.data Tree.t
+  type const_id = int
+
+  (* 
+    Pattern-Rewriter type 
+    Mirror the tree type with patrew instead of trees and an added Placeholder constructor 
+  *)
   type patrew =
   | Placeholder of string
   | Var of string (* A placeholder that only match variables *)
-  | Const of int * (Bitvector.t -> bool)
-  | RewConst of (int -> Bitvector.t)
+  | Const of const_id * (Bitvector.t -> bool)
+  (* 
+    Matches a constant with a filter function.
+    Assign an id to reuse it in the rewritting rules 
+  *)
+  | RewConst of (int -> Bitvector.t) 
+  (* Only used for rewritting purposes, transform an given bitsize into an bitvector *)
   | SizeMod of sizemod_t * patrew
   | Unop of unop_t * patrew
   | Binop of binop_t * patrew * patrew
   | Triop of triop_t * patrew * patrew * patrew
 
   module GenC = struct
-    let id = ref 0
+    let id : const_id ref = ref 0
     let mk_subst s = Placeholder s
     let mk_var s = Var s
     let mk_const bvf = incr id; Const (!id, bvf)
@@ -85,8 +67,11 @@ module Pattern = struct
     let mk_triop op t1 t2 t3 = Triop (op, t1, t2, t3)
   end
   
+  (* Short for Pattern Constructor, 
+     used to generate the patterns part of the 
+     match and replace algorithm *)
   module PC = struct
-    include MkShortcut (struct 
+    include Treeshortcut.Make (struct 
       type t = patrew
       include GenC
     end)
@@ -99,8 +84,11 @@ module Pattern = struct
     let smaxbv = GenC.mk_const Bitvector.is_max_sbv
   end
 
+  (* Short for Rewrite Constructor,
+     used to generate the rewrite part of the
+     match and replace algorithm *)
   module RC = struct
-    include MkShortcut (struct 
+    include Treeshortcut.Make (struct 
       type t = patrew
       include GenC
     end)
@@ -138,6 +126,8 @@ module Pattern = struct
       fun (s, h) -> (s, List.hd h) 
     ) l
 
+  (* Expand the patterns containing commutative operators
+     to a list pattern with all possible commutations *)
   let rec commut_pattern pat =
     match pat with
     | Binop (op, t1,t2) when Binop.is_commut op->
@@ -179,47 +169,49 @@ module Pattern = struct
         ) pats2
       ) pats1
 
-  let match_pattern (pattern : patrew) (tree: 'a Tree.t) =
-    let default = (false, ([],[])) in
-    let rec aux pat t ((vholders, cholders) as holders) =
+  
+
+  (* Matching algorithm --
+     When provided with a pattern and a tree, walk the tree to match
+     it against the patter.
+     If successful, returns two mappings:
+     - one from placeholder to tree
+     - one from const_id to tree
+  *)
+  let match_pattern (pattern : patrew) (tree: tree) : ((string * tree) list * (const_id * tree) list) option  =
+    let (>>=) = Option.bind in (* Allows shorter notation in the rest of this function *)
+    let rec aux pat (t : tree) ((vholders, cholders) as holders) =
       match pat, t.node with
       | Placeholder s, _ 
       | Var s, Tree.Var _ ->
-        (true, (assoc_add s t vholders, cholders))
-      | Const (id, f), Const c -> (f c.value, (vholders, (id, t) :: cholders))
+        Some (assoc_add s t vholders, cholders)
+      | Const (id, f), Const c when f c.value-> 
+        Some (vholders, (id, t) :: cholders)
       | SizeMod (opp,tpat), SizeMod (op, t') when SizeMod.eq op opp ->
         aux tpat t' holders
       | Unop (opp,tpat), Unop (op, t') when Unop.eq op opp ->
         aux tpat t' holders
       | Binop (opp, t1pat, t2pat), Binop (op, t1, t2) when Binop.eq op opp ->
-        let (res1, hold1) = aux t1pat t1 holders in
-        if res1 then
-          aux t2pat t2 hold1
-        else
-          default
+        aux t1pat t1 holders
+        >>= aux t2pat t2
       | Triop (opp, t1pat, t2pat, t3pat), Triop (op, t1, t2, t3) when Triop.eq op opp ->
-        let (res1, hold1) = aux t1pat t1 holders in
-        if res1 then (
-          let (res2, hold2) = aux t2pat t2 hold1 in
-          if res2 then
-            aux t3pat t3 hold2
-          else
-            default)
-        else
-          default
+        aux t1pat t1 holders
+        >>= aux t2pat t2
+        >>= aux t3pat t3
       | RewConst _, _ -> failwith "Tried to match a rewritter"
-      | _, _ -> default
+      | _, _ -> None
     in
-    let (v, (vholders, cholders)) = aux pattern tree ([], []) in
-    if not v then (false, [], [])
-    else (
-      let res = check_holders vholders in
-      if res then
-        (true, compact_holders vholders, cholders)
+    aux pattern tree ([],[])
+    >>= (fun (vholders, cholders) ->
+      if check_holders vholders then
+        Some (compact_holders vholders, cholders)
       else
-        (false, [], [])
+        None
     )
 
+  (*
+    Pretty-printing of variable mapping
+  *)
   let pp_vholder fmt l = 
     let rec aux fmt = function
     | [] -> Format.fprintf fmt "]"
@@ -228,6 +220,9 @@ module Pattern = struct
     Format.fprintf fmt "[";
     aux fmt l
 
+  (*
+    Rewrite parts of the match - rewrite algorithm --
+  *)
   let rewrite_pattern (rw : patrew) bitsz (vholder, cholders) =
     let rec aux = function
     | Placeholder s
@@ -235,8 +230,8 @@ module Pattern = struct
       try List.assoc s vholder with
       | Not_found -> 
         failwith (
-        Format.asprintf "Failed to found var/hole %s (vholder = %a)" s pp_vholder vholder
-      )
+          Format.asprintf "Failed to found var/hole %s (vholder = %a)" s pp_vholder vholder
+        )
     )
     | Const (id, _) -> List.assoc id cholders
     | RewConst bvf -> C.mk_const_of_bv (bvf bitsz)
@@ -251,111 +246,39 @@ module Pattern = struct
     in
     aux rw
 
+  (* The full match and rewrite algorithm *)
   let match_and_rewrite pat rewrite t =
     match match_pattern pat t with
-    | true, vholders, cholders -> 
+    | Some (vholders, cholders) -> 
       rewrite_pattern rewrite t.bitsz (vholders, cholders)
-    | false, _, _ -> t
+    | None -> t
 
+  (** Syntaxique sugar to ease the writting of rewrite rules *)
   let (-->) x y = (x,y)
 
-  let from_list (lp : (patrew * patrew) list) : unit Tree.t -> unit Tree.t =
+  let from_list (lp : (patrew * patrew) list) : tree -> tree =
     let lp = List.map (fun (x,y) -> match_and_rewrite x y) lp in
     fun t -> List.fold_left (|>) t lp
 
-  let from_list_with_commut (lp : (patrew * patrew) list) : unit Tree.t -> unit Tree.t =
+  let from_list_with_commut (lp : (patrew * patrew) list) : tree -> tree =
     let lp = List.concat_map (fun (x,y) -> List.map (fun x -> x,y) (commut_pattern x) ) lp in
     from_list lp
 end
 
+(**
+  [TreeSimplifier] creates a simplier modules that performs all the registered 
+  simplifications
+*)
 module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct 
   module C = UnitTreeConstructor (* This constructor uses hashconsing, allowing very fast tree equality check *)
   include C
 
-  let setvar (var : Oracle.variable) const tree =
+  let setvar (var : Tree.variable) const tree =
     match tree.node with
     | Var v when String.equal var.name v.name -> const
     | _ -> tree
-    
-  let bottom_up_apply opt tree =
-    let rec aux tree =
-      let optimized_subtree =
-        match tree.node with
-        | Var _ | Const _ -> tree
-        | SizeMod (ty, t1) -> 
-          let t1' = aux t1 in
-          mk_sizemod ty t1'
-        | Unop (ty, t1) -> 
-          let t1' = aux t1 in
-          mk_unop ty t1'
-        | Binop (ty, t1, t2) -> 
-          let t1' = aux t1 in
-          let t2' = aux t2 in
-          mk_binop ty t1' t2'
-        | Triop (ty, t1, t2, t3) -> 
-          let t1' = aux t1 in
-          let t2' = aux t2 in
-          let t3' = aux t3 in
-          mk_triop ty t1' t2' t3'
-      in
-      opt optimized_subtree
-    in
-    aux tree
-
-  let sum (x : Oracle.constant) (y : Oracle.constant) = O.const_of_bitv (Binop.apply Add x.value y.value)
-
-  let sub (x : Oracle.constant) (y : Oracle.constant) = O.const_of_bitv (Binop.apply Sub x.value y.value)
-
-  (* Handles involutive functions : f (f x) = x *)
-  let involution t =
-    match t.node with
-    | Unop (ty1, { node = Unop (ty2, t'); _ })
-      when Unop.eq ty1 ty2 && Unop.is_involutif ty1 -> t'
-    | _ -> t
-
-  (* Handles nilpotent functions : f (x,x) = 0 *)
-  let nilpotence t =
-    match t.node with
-    | Binop (ty, t1, t2)
-      when Binop.is_nilpotent ty && C.eq t1 t2 ->
-        mk_const_of_bv (Bitvector.zeros t.bitsz)
-    | _ -> t
   
-  (* Handles idempotent functions : f(x,x) = x *)
-  let idempotence t =
-    match t.node with
-    | Binop (ty, t1, t2)
-      when Binop.is_idempotent ty && C.eq t1 t2 -> t1
-    | _ -> t
-
-  (* Handles neutral elements : f (x,c) = x *)
-  let neutral_element t =
-    let gard f (c : Oracle.constant) t' =
-      if f c.value then t'
-      else t
-    in
-    match t.node with
-    | Binop (ty, t', { node = Const c; _ }) ->
-      gard (Binop.neutral_element ty) c t'
-    | Binop (ty, { node = Const c; _ }, t')
-        when Binop.is_commut ty ->
-      gard (Binop.neutral_element ty) c t'
-    | _ -> t
-
-  (* Handles absorbing elements : f (x,c) = c *)
-  let absorbing_element t =
-    let gard f (c : Oracle.constant) cnode =
-      if f c.value then cnode
-      else t
-    in
-    match t.node with
-    | Binop (ty, _, ({ node = Const c; _ } as t')) ->
-      gard (Binop.absorbing_element ty) c t'
-    | Binop (ty, ({ node = Const c; _ } as t'), _)
-        when Binop.is_commut ty ->
-      gard (Binop.absorbing_element ty) c t'
-    | _ -> t
-    
+  (* Apply a transformation to all the childs of a tree *)
   let apply_to_subtree f t =
     match t.node with
     | Var _ 
@@ -368,7 +291,61 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
       mk_binop op (f t1) (f t2)
     | Triop (op, t1, t2, t3) ->
       mk_triop op (f t1) (f t2) (f t3)
+
+  (* Bottom up walk in the provided tree, applying the provided transformation along the way *)
+  let bottom_up_apply opt tree =
+    let rec aux tree =
+      opt (apply_to_subtree aux tree)
+    in
+    aux tree
+
+  let sum (x : Tree.constant) (y : Tree.constant) = Tree.const_of_bitv (Binop.apply Add x.value y.value)
+
+  let sub (x : Tree.constant) (y : Tree.constant) = Tree.const_of_bitv (Binop.apply Sub x.value y.value)
+
+  (* Reduces involutive functions : f (f x) = x *)
+  let involution t =
+    match t.node with
+    | Unop (ty1, { node = Unop (ty2, t'); _ })
+      when Unop.eq ty1 ty2 && Unop.is_involutif ty1 -> t'
+    | _ -> t
+
+  (* Reduces nilpotent functions : f (x,x) = 0 *)
+  let nilpotence t =
+    match t.node with
+    | Binop (ty, t1, t2)
+      when Binop.is_nilpotent ty && C.eq t1 t2 ->
+        mk_const_of_bv (Bitvector.zeros t.bitsz)
+    | _ -> t
   
+  (* Reduces idempotent functions : f(x,x) = x *)
+  let idempotence t =
+    match t.node with
+    | Binop (ty, t1, t2)
+      when Binop.is_idempotent ty && C.eq t1 t2 -> t1
+    | _ -> t
+
+  (* Reduces functions with neutral element e : f (x, e) = x or f(e, x) = x *)
+  let neutral_element t =
+    match t.node with
+    | Binop (ty, t', { node = Const c; _ }) 
+      when Binop.is_neutral_element ty ~dir:(Right ()) c.value -> t'
+    | Binop (ty, { node = Const c; _ }, t')
+        when Binop.is_neutral_element ty ~dir:(Left ()) c.value -> t'
+    | _ -> t
+
+  (* Reduces functions with absorbing element c : f (x, c) = c or f(c, x) = c *)
+  let absorbing_element t =
+    match t.node with
+    | Binop (ty, _, ({ node = Const c; _ } as t')) 
+      when Binop.is_absorbing_element ty ~dir:(Right ()) c.value -> t'
+    | Binop (ty, ({ node = Const c; _ } as t'), _)
+        when Binop.is_absorbing_element ty ~dir:(Left ()) c.value -> t'
+    | _ -> t
+  
+  (******** Associative-Commutative Operators Handlers *******)
+
+  (* Collect all the use of the provided operator at the top of the tree  *)
   let ac_tree_collector op t =
     let rec aux acc t = 
       match t.node with
@@ -379,8 +356,10 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
     assert (Binop.is_assoc op && Binop.is_commut op);
     aux [] t  
 
-  (* /!\ Only work with sorted list *)
+  (* Regroup redundant subtrees (after sorting it first) 
+     E.g. [t1,t1,t2,t3] -> [(2,t1), (1,t2), (1,t3)] *)
   let regroup l =
+    let l = List.sort C.compare l in
     let rec aux acc l =
       match acc, l with
       | _, [] -> acc
@@ -393,22 +372,28 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
     in
     aux [] l
 
+  (* Create list with n times the provided element *)
   let explode (n,t) =
     List.init n (fun _ -> t)
 
-  let base_ac_opt f t =
+  (* Optimize the provided tree by regrouping subtrees using the same AC-operator
+     There is no cross-operator optimization
+  *)
+  let base_ac_opt opt t =
     let rec aux t =
       match t.node with
       | Binop (op, _, _) when 
         Binop.is_assoc op && Binop.is_commut op ->
+        (* Generates an optimized list of childs *)
         let childs = 
           ac_tree_collector op t
-          |> List.sort C.compare
           |> regroup
-          |> (f op) (* Use the property of idempotence to cut childs *)
+          |> opt op (* Optimize the child number with optimizations such as idempotence, nilpotence, ...  *)
           |> List.map (fun (n, t') -> n, aux t') (* Optimize the childs *)
+          (* NB : Could use a specific version for various operators (e.g. if the operator is +, instead of x+x+x+x, generate 4*x) *)
           |> List.concat_map explode
         in
+        (* Reduction to recreate the tree *)
         (match childs with
         | [] -> failwith "no tree found in base_ac_opt"
         | h :: l ->
@@ -417,11 +402,14 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
     in
     aux t
 
+  (**** Various group optimizations for AC operators *****)
+  (* Idempotent optimization *)
   let ac_idempotence op l =
     if Binop.is_idempotent op then
       List.map (fun (_,t) -> (1,t)) l
     else l
   
+  (* Nilpotent optimization *)
   let ac_nilpotence op l =
     let aux (n,t) =
       if n mod 2 = 0 then (1, mk_const_of_bv (Bitvector.zeros t.bitsz))
@@ -429,10 +417,16 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
     in
     if Binop.is_nilpotent op then 
       List.map aux l
-    else l 
+    else l
   
-  let ac_constant_prop op l = 
-    let (consts, others) = List.partition_map (function | (n, { node = Const c; _ }) -> Left (n,c.value) | t -> Right t) l in
+  (* Constant reduction optimization *)
+  let ac_constant_group_reduction op l = 
+    let (consts, others) = 
+      List.partition_map (function 
+        | (n, { node = Const c; _ }) -> Left (n,c.value) 
+        | t -> Right t
+      ) l
+    in
     let consts = List.concat_map explode consts in
     match consts with
     | [] -> others
@@ -440,13 +434,22 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
       let c = mk_const_of_bv ( List.fold_left (Binop.apply op) h t) in
       (1,c) :: others
 
+  let ac_opt =
+    base_ac_opt (fun op l -> 
+      l 
+      |> (ac_idempotence op) 
+      |> (ac_nilpotence op)
+      |> (ac_constant_group_reduction op))
+
+  (**** End Group optimizations for AC operators *****)
+  
 
   (* Specialize constant propagation for associative-commutative operators *)
   let ac_constant_propagation t =
     (* Shortcut functions & values *)
     let default = t in
-    let f ty (x : Oracle.constant) (y : Oracle.constant) = 
-      O.const_of_bitv (Binop.apply ty x.value y.value) 
+    let f ty (x : Tree.constant) (y : Tree.constant) = 
+      Tree.const_of_bitv (Binop.apply ty x.value y.value) 
     in
 
     (* Core of the function *)
@@ -466,41 +469,10 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
       | _ -> default
     )
     | _ -> default
+  
+  (******** End of Associative-Commutative Operators Handlers *******)
 
-  (* let pat_constant_propagation =
-    let open Pattern in
-    let t1 = GenC.mk_subst "t1" in
-    let t2 = GenC.mk_subst "t2" in
-    let _t3 = GenC.mk_subst "t3" in
-    let x = GenC.mk_var "x" in
-    let _y = GenC.mk_var "y" in
-    let c1 = GenC.mk_const (Fun.const true) in
-    let c2 = GenC.mk_const (Fun.const true) in
-
-    let add_pat = [
-      (* (c1 - b) + c2 = (c1 + c2) - b *)
-      PC.( (c1 - t1) + c2 ) --> RC.((c1 + c2) - t1);
-    ] 
-    and mul_pat = [
-    ]
-    and sub_pat = [
-    ]
-    and and_pat = [
-
-    ]
-    and or_pat = [
-
-    ]
-    and xor_pat = [
-      
-    ]
-    in
-    from_list_with_commut (
-      add_pat @ mul_pat @ sub_pat
-      @ and_pat @ or_pat @ xor_pat
-    ) *)
-
-  (* Handle constant propagation *)
+  (* Constant propagation optimization *)
   let constant_propagation t =
     let t = ac_constant_propagation t in
 
@@ -510,12 +482,11 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
     let all_one t = mk_const_of_bv (Bitvector.max_ubv t.bitsz) in
 
     match t.node with
-    (* Generic constant propagation *)
+    (* Generic local constant propagation *)
     | Triop (ty, { node = Const c1; _ }, { node = Const c2; _ }, { node = Const c3; _ } ) ->
         mk_const_of_bv (Triop.apply ty c1.value c2.value c3.value)
     | Binop (ty, { node = Const c1; _ }, { node = Const c2; _ }) ->
         mk_const_of_bv (Binop.apply ty c1.value c2.value)
-        (*TODO : In the case of sub, if c1 < c2 create unop Minus ...*)
     | Unop (ty, { node = Const c1; _ }) ->
         mk_const_of_bv (Unop.apply ty c1.value)
     | SizeMod (ty, { node = Const c1; _ }) ->
@@ -645,6 +616,8 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
 
     | _ -> default    
 
+  (* Specialized optimizations (written in pattern / rewrite format) 
+     for each operator *)
   let pat_specialize_opt =
     let open Pattern in
     let t1 = GenC.mk_subst "t1" in
@@ -737,6 +710,7 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
     )
 
 
+  (* Specialized optimization *)
   let specialize_local_opt (t : C.data t) : C.data t =
     (* Shortcut functions & values *)
     let default = t in
@@ -752,26 +726,20 @@ module TreeSimplifier (T : TreeConstructor) (O : Oracle.ORACLE) = struct
         let t2 = bottom_up_apply (setvar v (one t2)) t2 in
         mk_triop Im t1 t2 t3
     (* Mod optimizations *)
-    (* TODO : This is not entirely true (fails for x == 0) *)
+    (* TODO : This is not entirely true (fails for t3 == 0) *)
     | Triop (Mod, t1, t2, t3) 
           when C.eq t1 t2 && C.eq t1 t3 -> all_zero t1
-
     | _ -> default
-  
-  let ac_opt =
-    base_ac_opt (fun op l -> 
-      l 
-      |> (ac_idempotence op) 
-      |> (ac_nilpotence op)
-      |> (ac_constant_prop op))
 
+  (* Repeat optimisations until there is no more changes *)
   let rec opt_saturation opt tree =
     let ntree = bottom_up_apply opt tree in
     let ntree = ac_opt ntree in
     if C.eq tree ntree then tree
     else
       opt_saturation opt ntree
-  
+
+  (* Core function assembling all the previous ones *)
   let simplify tree =
     let t = C.transfer tree in
     let aux t =

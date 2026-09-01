@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -19,17 +19,19 @@
 (*                                                                        *)
 (**************************************************************************)
 
+type kind = ILS | RW | HC | MH | SA 
+
 (** Results summary i.e. what is returned by S-metaheuristics **)
 type summary = {
     success : bool ;
-    expression : string ;
-    simplified : string ;
+    expression : unit Tree.t;
+    simplified : unit Tree.t;
     smtlib : string ;
     size : int ;
     time_synthesis : float ;
     time_simplify : float ;
     nb_mutations : int ;
-  }
+}
 
 module type DIST = Distance.DIST
 module type VECDIST = Distance.VECDIST
@@ -50,10 +52,12 @@ module type BaseSearch = sig
                  gen_sol: (Mutations.mutd Tree.t -> Mutations.mutd solution) ->  
                  best_sol: Mutations.mutd solution ref -> 
                  maxdepth: int -> 
-                 unit
+                 bool
 end
 
-module MkSearch (BSF: functor (M : Mutations.MUTATOR) -> BaseSearch) (M : Mutations.MUTATOR) (GD : VECDIST with type t = M.data) (FD : VECDIST with type t = M.data) (O : Oracle.ORACLE) : S = struct
+module MkSearch (BSF: functor (M : Mutations.MUTATOR) -> BaseSearch) (M : Mutations.MUTATOR) 
+    (GD : VECDIST with type t = M.data) (FD : VECDIST with type t = M.data)
+    (O : Oracle.ORACLE) : S = struct
     module Simp = Simplifier.TreeSimplifier (M) (O)
     module BS = BSF (M)
 
@@ -66,12 +70,12 @@ module MkSearch (BSF: functor (M : Mutations.MUTATOR) -> BaseSearch) (M : Mutati
     let cost tree = 
         let actual = M.eval tree in
         let expected = O.out_values () in
-        GD.vecdist actual expected
+        GD.vecdist tree actual expected
     
     let final_cost tree = 
         let actual = M.eval tree in
         let expected = O.out_values () in
-        FD.vecdist actual expected
+        FD.vecdist tree actual expected
 
     let mutnb = ref 0
 
@@ -88,8 +92,7 @@ module MkSearch (BSF: functor (M : Mutations.MUTATOR) -> BaseSearch) (M : Mutati
 
             let finished = 
                 try
-                    BS.search ~terminated ~gen_sol ~best_sol ~maxdepth;
-                    true
+                    BS.search ~terminated ~gen_sol ~best_sol ~maxdepth
                 with Halt | CEGISHalt -> false
             in
                 
@@ -121,8 +124,8 @@ module MkSearch (BSF: functor (M : Mutations.MUTATOR) -> BaseSearch) (M : Mutati
             { 
                 (* Return the solution *)
                 success = terminated !best_sol ;
-                expression = M.to_string !best_sol.tree; 
-                simplified = M.to_string simpl;
+                expression = Tree.UnitTreeConstructor.transfer !best_sol.tree; 
+                simplified = Tree.UnitTreeConstructor.transfer simpl;
                 smtlib = M.to_smtlib simpl;
                 size = M.get_expr_size simpl;
                 time_synthesis = time_synth -. time_base; 
@@ -143,7 +146,7 @@ module Iterated_local_search (M : Mutations.MUTATOR) : BaseSearch = struct
             if n = num_cuts then t
             else perturbate_loop (n + 1) (M.cut t)
         in
-        perturbate_loop 0 sol.tree    
+        perturbate_loop 0 sol.tree
 
     let search ~terminated ~gen_sol ~best_sol ~maxdepth =
         (* Mutate the AST iteratively
@@ -154,7 +157,7 @@ module Iterated_local_search (M : Mutations.MUTATOR) : BaseSearch = struct
             (* Iterative mutations of the AST *)
             if is_stuck n || terminated sol then sol
             else
-                let mutated = M.mutate maxdepth sol.tree (Some depth) in
+                let mutated = M.mutate maxdepth sol.tree None in
                 let sol' = gen_sol mutated in
                 if terminated sol' then sol'
                 else if sol'.cost < sol.cost then loop sol' 0 depth
@@ -169,7 +172,8 @@ module Iterated_local_search (M : Mutations.MUTATOR) : BaseSearch = struct
                 best_sol := if (terminated sol') || (sol'.cost < !best_sol.cost) then sol' else !best_sol;
                 iteration best_sol (depth + 1)
         in
-        iteration best_sol 0
+        iteration best_sol 0;
+        true
 end
 
 (** Module for the Random Walk S-metaheuristic **)
@@ -182,7 +186,8 @@ module Random_walk (M : Mutations.MUTATOR) : BaseSearch = struct
                 best_sol := if (terminated sol') || (sol'.cost < !best_sol.cost) then sol' else !best_sol;
                 loop sol'
         in
-        loop !best_sol
+        loop !best_sol;
+        true
 end
 
 (** Module for the Hill Climbing S-metaheuristics **)
@@ -200,7 +205,8 @@ module Hill_climbing (M : Mutations.MUTATOR) : BaseSearch = struct
                 if sol'.cost < sol.cost then loop sol' 0
                 else loop sol (n + 1)
         in
-        loop !best_sol 0
+        loop !best_sol 0;
+        true
 end
 
 (** Module for the Simulated Annealing S-metaheuristic **)
@@ -263,7 +269,8 @@ module Simulated_annealing (M : Mutations.MUTATOR) : BaseSearch = struct
                 else
                     batch_loop temp sol count (n + 1)
         in
-        loop t0 !best_sol 1
+        loop t0 !best_sol 1;
+        true
 end
 
 
@@ -325,14 +332,26 @@ module Metropolis_hastings (M : Mutations.MUTATOR) : BaseSearch = struct
                 else
                     batch_loop temp sol count (n + 1)
         in
-        loop t0 !best_sol 1
+        loop t0 !best_sol 1;
+        true
 end
 
-(** Select from a string which distance to use **)
-let of_string (module M : Mutations.MUTATOR) (module GD : VECDIST with type t = M.data) (module FD : VECDIST with type t = M.data) (module O : Oracle.ORACLE) = function
-| "ils" -> (module MkSearch (Iterated_local_search) (M) (GD) (FD) (O) : S)
-| "hc" -> (module MkSearch (Hill_climbing) (M) (GD) (FD) (O) : S)
-| "rw" -> (module MkSearch (Random_walk) (M) (GD) (FD) (O) : S)
-| "sa" -> (module MkSearch (Simulated_annealing) (M) (GD) (FD) (O) : S)
-| "mh" -> (module MkSearch (Metropolis_hastings) (M) (GD) (FD) (O) : S)
-| _ -> invalid_arg "Undefined heuristic option"
+let kind_of_string = function 
+| "ils" -> ILS
+| "hc" -> HC
+| "rw" -> RW
+| "sa" -> SA
+| "mh" -> MH
+| _ -> invalid_arg "Undefined heuristic option" 
+
+(** Select from a {!kind}  which heuristic to use *)
+let of_kind (module M : Mutations.MUTATOR) (module GD : VECDIST with type t = M.data) (module FD : VECDIST with type t = M.data) (module O : Oracle.ORACLE) = function
+| ILS -> (module MkSearch (Iterated_local_search) (M) (GD) (FD) (O) : S)
+| HC -> (module MkSearch (Hill_climbing) (M) (GD) (FD) (O) : S)
+| RW -> (module MkSearch (Random_walk) (M) (GD) (FD) (O) : S)
+| SA -> (module MkSearch (Simulated_annealing) (M) (GD) (FD) (O) : S)
+| MH -> (module MkSearch (Metropolis_hastings) (M) (GD) (FD) (O) : S)
+
+(** Select from a string which heuristic to use **)
+let of_string (module M : Mutations.MUTATOR) (module GD : VECDIST with type t = M.data) (module FD : VECDIST with type t = M.data) (module O : Oracle.ORACLE) s = 
+    of_kind (module M) (module GD) (module FD) (module O) (kind_of_string s)

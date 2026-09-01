@@ -10,7 +10,6 @@
     5.  [Inference rules](#inference-rules)
     6.  [Generating SyGUS problems](#generating-sygus-problems)
 3.  [Experiments](#experiments)
-4.  [Synthesize all blocks from a execution trace](#synthesize-all-blocks-from-a-execution-trace)
 5.  [References](#references)
 
 
@@ -91,8 +90,6 @@ In this case, the file `add.ini` is:
 $ cat examples/bin/add.ini
 starting from <add>
 
-set sample output stdout
-
 explore all
 
 hook <add:last> with 
@@ -107,7 +104,9 @@ The `hook` one is the end of the reverse window (remark: `<add:last>` stands for
 
 Other examples of scripts can be found in the `sampler/examples` directory.
 
-It is also possible to sample a symbolic expression directly. An example is given in `sampler/examples/expr.ini`. To sample it, use:
+**Handling multiple paths.** Starting from version 0.2.2, Xyntia can sample code that have multiple paths. To do so, it relies on the [Binsec](https://binsec.github.io/) symbolic execution engine to enumerate all paths (Depth-first-search order). However, the number of paths may be huge (or even infinite). In such a case, we recommend to set a maximum number of paths to enumerate through the option `-sse-maxpaths <N>`. 
+
+**Sampling symbolic expressions.** It is also possible to sample a symbolic expression directly. An example is given in `sampler/examples/expr.ini`. To sample it, use:
 ```
 # The <() is here to replace the binary path. Indeed, in this case we do not need any binary (only an empty file)
 xyntia -bin <() -config sampler/examples/expr.ini
@@ -284,62 +283,8 @@ $ xyntia -bin <binary-file> -config <config-file> -sygus
 
 # Experiments
 
-<details open><summary>Show</summary>
+How to run experiments with Xyntia is detailed [here](./scripts/README.md).
 
-
-All datasets and scripts are given to reproduce expriments presented in [1]. Especially, it contains the B1 dataset from the [Syntia](https://github.com/RUB-SysSec/syntia) paper [2] 
-(Thank you [Tim Blazytko](https://synthesis.to/) for sharing it with us), our B2 dataset and the datasets used to evaluate anti-black-box deobfuscation.
-
-## Python dependencies
-
-To facilitate installation, we also give the `requirements.txt` to easily install the python dependencies.
-
-To create and activate a python environment, execute the following commands (optional):
-```
-$ python3 -m venv <name-virtualenv> # create a virtual environment for python3
-$ source <name-virtualenv>/bin/activate # active the virtual environment
-```
-
-Then, install dependencies:
-```
-$ pip install -r requirements.txt
-```
-
-## Launch expriments
-
-Datasets used in [1] can be found in the `./datasets` directory.
-To launch Xyntia over a dataset (e.g., B2) with a given timeout (e.g., 1s) execute the following commands:
-
-```
-$ python3 ./scripts/bench/bench.py --dataset datasets/b2 --out results --parallel -- xyntia -check -time 1
-```
-
-The option and their meanings can be found through the `--help` option.
-
-
-</details>
-
-# Synthesize all blocks from a execution trace
-
-<details open><summary>Show</summary>
-
-
-We also give `./scripts/utils/all_from_trace.sh` which traces code execution with Ghidra or GDB, extracts each code block executed, samples and synthesizes them.
-The manual is available through `./scripts/utils/all_from_trace.sh --help` and it can be run as follows: 
-
-```
-$ XYNTIA="xyntia <options>" # the xyntia command to use
-$ ./scripts/utils/all_from_trace.sh --outdir <resdir> --all -- binary arg1 arg2 ...
-```
-
-Here is an example:
-
-```
-$ cd examples/bin && make && cd -
-$ ./scripts/utils/all_from_trace.sh --outdir <resdir> --all -- ./examples/bin/add
-```
-
-</details>
 
 # References
 

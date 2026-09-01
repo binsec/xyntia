@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -22,6 +22,26 @@
 include Binsec.Bitvector
 
 let is_even x = not (get_bit x 0)
+
+(** Protect the shifts to avoid computational explosion
+when the shift value is large by short-circuiting the computation *)
+let protected_shift f ?(is_arith = false) bv i =
+  let size = size_of bv in
+  if i < 0 then bv
+  else if i > size then (
+    if is_arith && Z.sign (value_of bv) < 0 then
+      ones size
+    else
+      zeros size
+  )
+  else
+    create (f (value_of bv) i) size
+
+let shift_left bv i = protected_shift Z.shift_left bv i
+
+let shift_right bv i = protected_shift Z.shift_right bv i
+
+let shift_right_signed bv i = protected_shift Z.shift_right ~is_arith:true bv i
 
 let mod_inverse x =
   let f8bits x =
@@ -135,7 +155,7 @@ let byteswap (bv : t) : t =
   let rec loop i x =
     if i = n then x
     else
-      let y = extract bv { lo = i; hi = i + 8 - 1 } in
+      let y = extract ~lo:i ~hi:(i+8-1) bv in
       match x with
       | None -> loop (i + 8) (Some y)
       | Some z -> loop (i + 8) (Some (concat [ z; y ]))

@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -21,18 +21,22 @@
 
 open Yojson.Basic.Util
 
-type variable  = { name : string ; sz : int }
-type constant = { name : string ; value : Bitvector.t }
+type variable = Tree.variable
+type constant = Tree.constant
+
+type inputs = (variable * Bitvector.t) array
 
 type sample = {
-    vars : (variable * Bitvector.t) array ;
+    vars : inputs;
     res  : variable * Bitvector.t         ;
 }
 
 type t = {
     ctx     : variable array * variable ;
     consts  : constant array ;
-    mutable samples : sample array   ;
+    mutable samples : sample array ;
+    mutable affineplus_samples : sample array ;
+    mutable affinexor_samples : sample array ;
     ops : string list option ;
     orig_size : int option;
 }
@@ -46,22 +50,22 @@ module type ORACLE = sig
     val const_values : constant -> Bitvector.t array
     val out_values : unit -> Bitvector.t array
     val out_var : unit -> variable
-    val random_var : unit -> variable
-    val random_const : unit -> constant
     val print : unit -> unit
     val vars : unit -> variable array
     val consts : unit -> constant array
-    val ops : unit -> string list option
-    val const_of_int : int -> int -> constant
-    val const_of_bitv : Bitvector.t -> constant
     val get_sample : int -> sample
+    val get_samples : unit -> sample array
+    val get_affineplus_sample : int -> sample
+    val get_affineplus_samples : unit -> sample array
+    val get_affinexor_samples : unit -> sample array
+    val naffineplussamples : unit -> int
+    val get_affinexor_sample : int -> sample
+    val naffinexorsamples : unit -> int
     val sample_output : sample -> variable * Bitvector.t
     val sample_inputs : sample -> (variable * Bitvector.t) array
     val add_sample : (variable * Bitvector.t) array -> (variable * Bitvector.t) -> unit 
     val get_expr_size : unit -> int option
 end
-
-let ops {ops ; _} = ops
 
 let vars { ctx ; _ } = fst ctx
 
@@ -72,6 +76,9 @@ let nvars t = Array.length (fst t.ctx)
 let nconsts t = Array.length (t.consts)
 
 let nsamples { samples ; _ } = Array.length samples
+let naffineplussamples { affineplus_samples ; _ } = Array.length affineplus_samples
+let naffinexorsamples { affinexor_samples ; _ } = Array.length affinexor_samples
+
 
 let output_of_sample sample = sample.res
 let inputs_of_sample sample = sample.vars
@@ -86,31 +93,12 @@ let var_values t (var : variable) =
     in
     Array.map (fun { vars ; _ } -> aux vars var.name (Array.length vars) 0) t.samples
 
-let const_values t c =
+let const_values t (c : constant) =
     Array.make (nsamples t) c.value
 
 let out_values { samples ; _ } = Array.map (fun { res ; _ } -> snd res) samples
 
 let out_var { ctx = (_, var) ; _ } = var
-
-let const_of_int value sz = {name=(string_of_int value); value=(Bitvector.of_int ~size:sz value)}
-let const_of_bitv value = { name=(Bitvector.to_string value); value=value}
-
-(** Create a variable **)
-let mk_var name sz =
-    if sz <= 0 then invalid_arg "Variable size should be positive"
-    else if String.length name = 0 then
-        invalid_arg "Variable name should be non-empty";
-    { name ; sz }
-
-(** Get a random variable **)
-let random_var t =
-    let vars = fst t.ctx in
-    vars.(Random.int (nvars t))
-
-(** Get a random constant value **)
-let random_const t =
-    (t.consts).(Random.int (Array.length t.consts))
 
 let hex_to_int json = int_of_string (to_string json)
 let to_string json = String.lowercase_ascii (to_string json)
@@ -120,10 +108,9 @@ let get_sample_input json =
     json |> to_assoc
     |> List.map
         (fun (_, t) ->
-            let var = {
-                name = to_string (member "location" t) ;
-                sz =  hex_to_int (member "size" t);
-            }
+            let var = Tree.var_of 
+                (to_string (member "location" t)) 
+                (hex_to_int (member "size" t)) 
             in
             let value = Bitvector.create
                             (Z.of_string (to_string (member "value" t)))
@@ -135,10 +122,9 @@ let get_sample_input json =
 (** Extract observed outputs from json file **)
 let get_sample_output json =
     let json = member "0" json in
-    let var = {
-        name = to_string (member "location" json) ;
-        sz   = hex_to_int (member "size" json);
-    }
+    let var = Tree.var_of 
+        (to_string (member "location" json)) 
+        (hex_to_int (member "size" json)) 
     in
     let hex_val = to_string (member "value" json) in
     (var, Bitvector.create (Z.of_string hex_val) var.sz)
@@ -155,13 +141,35 @@ let get_samplings json =
     |> (List.map (fun (_, t) -> get_sample t))
     |> Array.of_list
 
+(** Extract all affine samples from json file **)
+let get_affineplus_samplings json =
+  let affineplus = json |> member "affineplus" in
+  match affineplus with 
+  | `Null -> 
+    [||]  (* Return empty array *)
+  | _ ->
+    affineplus |> to_assoc
+    |> List.map (fun (_, t) -> get_sample t)
+    |> Array.of_list
+
+let get_affinexor_samplings json =
+  let affinexor = json |> member "affinexor" in
+  match affinexor with 
+  | `Null -> 
+    [||]  (* Return empty array *)
+  | _ ->
+    affinexor |> to_assoc
+    |> List.map (fun (_, t) -> get_sample t)
+    |> Array.of_list
+
+
 (** Extract inputs meta information from json file **)
 let get_meta_inputs json =
     json |> member "initial" |> member "inputs" |> to_assoc
     |> List.map
-        (fun (_, t) ->
-            { name = to_string (member "location" t) ;
-            sz = hex_to_int (member "size" t)})
+        (fun (_, t) -> Tree.var_of
+            (to_string (member "location" t))
+            (hex_to_int (member "size" t)))
     |> Array.of_list
 
 (** Extract outputs meta information from json file **)
@@ -169,7 +177,7 @@ let get_meta_output json =
     let json = json |> member "initial" |> member "outputs" |> member "0" in
     let name = to_string (member "location" json) in
     let size = hex_to_int (member "size" json) in
-    mk_var name size
+    Tree.var_of name size
 
 
 (** Extract inputs and outputs meta information from json file **)
@@ -192,7 +200,7 @@ let get_expr_size json =
 (** Create constant values between min and max **)
 let mk_consts min max sz =
     Array.init (1 + max - min) (fun i ->
-        const_of_int (min + i) sz)
+        Tree.const_of_int (min + i) sz)
 
 (** Pretty printer **)
 let print t =
@@ -226,45 +234,149 @@ let gen_oracle (t : t) : (module ORACLE) =
         let const_values const = const_values oracle const
         let out_values () = out_values oracle
         let out_var () = out_var oracle
-        let random_var () = random_var oracle
-        let random_const () = random_const oracle
         let print () = print oracle
         let vars () = vars oracle
         let consts () = consts oracle
-        let ops () = ops oracle
-        let const_of_int = const_of_int
-        let const_of_bitv = const_of_bitv
         let get_sample i = oracle.samples.(i)
+        let get_samples () = oracle.samples
+        let get_affineplus_sample i = oracle.affineplus_samples.(i)
+        let get_affineplus_samples () = oracle.affineplus_samples
+        let get_affinexor_samples () = oracle.affinexor_samples
+        let naffineplussamples () = naffineplussamples oracle
+        let get_affinexor_sample i = oracle.affinexor_samples.(i)
+        let naffinexorsamples () = naffinexorsamples oracle
         let sample_inputs = inputs_of_sample
         let sample_output = output_of_sample
         let add_sample = add_sample oracle
         let get_expr_size () = oracle.orig_size 
     end : ORACLE)
 
-(** Create oracle from json file **)
-let of_json ~filename (cst: int array): (module ORACLE) =
-    let json = Yojson.Basic.from_file filename in
+let print_samples (samples : sample array) : string = 
+    Array.fold_left (fun acc s ->
+        let str_inputs = Array.fold_left (fun acc i -> 
+            let (i_var : variable), i_val = i in
+            acc ^ i_var.name ^ ":" ^ (Bitvector.to_hexstring i_val) ^ " "
+        ) "" s.vars in
+        let res_var, res_val = s.res in
+        let str_out = res_var.name ^ ":" ^ (Bitvector.to_hexstring res_val) in
+        acc ^ str_inputs ^ "-> " ^ str_out ^ "\n"
+    ) "" samples 
+
+(** Create oracle from json **)
+let of_json json (cst: int array): (module ORACLE) =
     let sz = get_size json in
-    let newcst = Array.map (fun v -> {name=Int.to_string v; value=(Bitvector.of_int ~size:sz v)}) cst in
+    let newcst = Array.map (fun v -> Tree.const_of_int v sz) cst in
     let oracle = {
         ctx = get_meta json ;
         consts = Array.append (mk_consts 1 1 sz) newcst ;
         samples = get_samplings json ;
-        ops = get_ops json           ;
+        affineplus_samples = get_affineplus_samplings json ;
+        affinexor_samples = get_affinexor_samplings json ;
+        ops = get_ops json ;
         orig_size = Some (get_expr_size json);
     } in
     gen_oracle oracle
 
+(** Create oracle from json file **)
+let of_json_file ~filename (cst: int array): (module ORACLE) =
+    let json = Yojson.Basic.from_file filename in
+    let sz = get_size json in
+    let newcst = Array.map (fun v -> Tree.const_of_int v sz) cst in
+    let oracle = {
+        ctx = get_meta json ;
+        consts = Array.append (mk_consts 1 1 sz) newcst ;
+        samples = get_samplings json ;
+        affineplus_samples = get_affineplus_samplings json ;
+        affinexor_samples = get_affinexor_samplings json ;
+        ops = get_ops json ;
+        orig_size = Some (get_expr_size json);
+    } in
+    gen_oracle oracle
+
+let create_ctx samples = 
+    Array.map (fun v -> fst v) samples.(0).vars, fst samples.(0).res
+
+let of_samples (samples: sample array) ?(affineplus_samples=[||]) ?(affinexor_samples=[||]) (cst: int array) : (module ORACLE) =
+    let sz = Bitvector.size_of (snd samples.(0).res) in
+    let newcst = Array.map (fun v -> Tree.const_of_int v sz) cst in
+    let ctx = create_ctx samples in
+    
+    let oracle = {
+        ctx = ctx;
+        consts = Array.append (mk_consts 1 1 sz) newcst;
+        samples = samples;
+        affineplus_samples = affineplus_samples;
+        affinexor_samples = affinexor_samples;
+        ops = None;
+        orig_size = None;
+    } in
+    gen_oracle oracle
+ 
+let rec eval (t : unit Tree.t) inputs = 
+    let module SizeMod = Operators.SizeMod in
+    let module Unop = Operators.Unop in
+    let module Binop = Operators.Binop in
+    let module Triop = Operators.Triop in    
+    match t.node with
+    | Const c -> Array.init (Array.length inputs) (fun _ -> c.value)
+    | Var v -> Array.map (fun i -> 
+        let value_opt = Array.find_opt (fun ((var : variable), _) -> String.equal v.name var.name) i in
+        let _, value = Option.get value_opt in
+        value) inputs
+    | SizeMod (op, t) -> Array.map (fun v -> SizeMod.apply op v) (eval t inputs)
+    | Unop (op, t) -> Array.map (fun v -> Unop.apply op v) (eval t inputs)
+    | Binop (op, t1, t2) -> Array.map2 (fun v1 v2 -> Binop.apply op v1 v2) (eval t1 inputs) (eval t2 inputs)
+    | Triop (op, t1, t2, t3) -> Utility.map3 (fun v1 v2 v3 -> Triop.apply op v1 v2 v3) (eval t1 inputs) (eval t2 inputs) (eval t3 inputs)
+
+
+let of_expr (t : unit Tree.t) (inputs : inputs array) ?(affineplus_inputs=[||]) ?(affinexor_inputs=[||]) (outvar : variable) (cst: int array) = 
+    
+    let outputs = eval t inputs in
+    let samples : sample array = Array.mapi (fun id i -> {
+        vars = i;
+        res = (outvar, outputs.(id))
+    }) inputs in
+
+    let affineplus_out = eval t affineplus_inputs in
+    let affineplus_samples : sample array = Array.mapi (fun id i -> {
+        vars = i;
+        res = (outvar, affineplus_out.(id))
+    }) affineplus_inputs in
+
+    let affinexor_out = eval t affinexor_inputs in
+    let affinexor_samples : sample array = Array.mapi (fun id i -> {
+        vars = i;
+        res = (outvar, affinexor_out.(id))
+    }) affinexor_inputs in
+
+    let sz = Bitvector.size_of (snd samples.(0).res) in
+    let newcst = Array.map (fun v -> Tree.const_of_int v sz) cst in
+    let ctx = create_ctx samples in
+
+    let oracle = {
+        ctx = ctx;
+        consts = Array.append (mk_consts 1 1 sz) newcst;
+        samples = samples;
+        affineplus_samples = affineplus_samples;
+        affinexor_samples = affinexor_samples;
+        ops = None;
+        orig_size = Some t.sz;
+    } in
+    gen_oracle oracle
+    
+
 let dummyOracle =
     let oracle = {
-        ctx = ([|
-            {name="v0"; sz=32}; {name="v1"; sz=32};
-            {name="v2"; sz=32}; {name="v3"; sz=32};
-            {name="v4"; sz=32}; {name="v5"; sz=32};
+        ctx = Tree.([|
+            (var_of "v0" 32); (var_of "v1" 32);
+            (var_of "v2" 32); (var_of "v3" 32);
+            (var_of "v4" 32); (var_of "v5" 32);
         |], 
-        {name="output"; sz=32}) ;
+        (var_of "output" 32)) ;
         consts = [||] ;
         samples = [||] ;
+        affineplus_samples = [||] ;
+        affinexor_samples = [||];
         ops = None ;
         orig_size= Some 32;
     } in

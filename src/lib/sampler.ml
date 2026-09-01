@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -19,13 +19,19 @@
 (*                                                                        *)
 (**************************************************************************)
 
+module Libsse = Binsec_cli_sse
+
+type samplekind = File of string | Json of Yojson.Basic.t
+type groundtruth = SmtFile of string | BinsecFormula of Binsec_smtlib.Formula.formula | Nothing
+
 let outdir = ref None
 
-let sample binary config isa_opt out_opt = 
-  Libsse.Options.Engine.set Libterm.Senv.Vanilla;
+let sample ?sse_depth:sd ?sse_maxpaths:sm ?quiet:(quiet=false) binary config isa_opt out_opt = 
+  Libsse.Options.Engine.set Libsse.Options.Engine.Default;
   Libsse.Options.ScriptFiles.set [config];
   Binsec.Kernel_options.ExecFile.set binary;
   Libsse.Options.Logger.quiet ();
+
   (match isa_opt with 
   | Some "x86" -> Binsec.Kernel_options.Machine.set Binsec.Machine.x86
   | Some "amd64" -> Binsec.Kernel_options.Machine.set Binsec.Machine.amd64
@@ -34,30 +40,41 @@ let sample binary config isa_opt out_opt =
   | Some "ppc64" -> Binsec.Kernel_options.Machine.set Binsec.(Machine.ppc64 BigEndian) 
   | Some "riscv" -> Binsec.Kernel_options.Machine.set Binsec.(Machine.riscv `x32) 
   | Some "riscv64" -> Binsec.Kernel_options.Machine.set Binsec.(Machine.riscv `x64) 
-  | None -> Binsec.Kernel_options.Machine.set Binsec.Machine.x86;
-      Binsec.Kernel_functions.Loader.set_arch_from_file ~filename:binary;
+  | None -> (
+    Binsec.Kernel_functions.Loader.set_arch_from_file ~filename:binary;
+    (match Binsec.Kernel_options.Machine.get () with
+    | Unknown -> Binsec.Kernel_options.Machine.set Binsec.Machine.x86
+    | _ -> ()))
   | _ -> failwith "unknown ISA");
   
-  Xyntiasampler.Termsampler.enable ();
-  Xyntiasampler.Termsampler.Mode.set (Xyntiasampler.Termsampler.Xyntia);
+  Xyntiasampler.Xcli.Namespace.enable ();
+  Xyntiasampler.Xcli.Mode.set (Xyntiasampler.Xcli.Xyntia);
 
-  outdir := (match out_opt with 
-  | Some _ -> out_opt
-  | None -> Some (Printf.sprintf "/tmp/xyntiasampling_%d" (Unix.getpid ())));
+  (match out_opt with 
+  | Some d -> Xyntiasampler.Xcli.OutDir.set d
+  | None -> ());
 
-  Xyntiasampler.Termsampler.OutDir.set (Option.get !outdir);
-  let module Eng = (val (Libsse.Options.Engine.get_factory ())) in
-  let module R = Libsse.Exec.Run (Eng) (Libsse.Heuristic.Dfs) () in
-  R.unit
+  Xyntiasampler.Xcli.Quiet.set quiet;
+
+  (match sd with
+  | Some d -> 
+    Libsse.Options.MaxDepth.set d;
+  | None -> ());
+
+  (match sm with
+  | Some d -> Xyntiasampler.Xcli.MaxPath.set d;
+  | None -> ());
+  
+  Libsse.Options.Search_heuristics.set Dfs;
+  Libsse.Options.enable ();
+  Libsse.Sse.run ()
+
 
 let get_formula () =
-  (Option.get !outdir) ^ "/formula"
+  BinsecFormula (!Xyntiasampler.Termsampler.out_formula |> Option.get)
 
 let get_samples () =
-    Sys.readdir (Option.get !outdir)
-    |> Array.to_list
-    |> List.filter (fun x -> Filename.extension x = ".json")
-    |> List.map (fun x -> (Option.get !outdir) ^ "/" ^ x) 
+    List.map (fun a -> Json a) !Xyntiasampler.Termsampler.json_samples
 
 let remove_samples () =
   FileUtil.rm ~recurse:true [Option.get !outdir];

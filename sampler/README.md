@@ -33,7 +33,6 @@ where:
 
 The plugin defines new declarations and instructions in DBA:
 * `sample N [ reg_1, ..., reg_n ]`, which specify to generate N samples for each output. A list of target register outputs can be set, in such a case, only these are sampled otherwise all detected outputs are.
-* `set sample output TARGET`, which specify where should be stored the sampling results. TARGET can equal `stdout` or `"path/to/directory"`.
 * `set domain VAR [MIN, MAX]` which specify the sampling domain for the VAR  input. VAR can be a register or any DBA variable but not a memory cell. To specify the domain of a memory cell, see `examples/snapshat.ini`
 * `prune constant outputs` which prunes all the constant outputs (i.e., with no input variables) from the set of sampled outputs
 

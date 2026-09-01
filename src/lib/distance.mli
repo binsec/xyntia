@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -19,6 +19,11 @@
 (*                                                                        *)
 (**************************************************************************)
 
+type kind = LOGARITH | ARITH | XOR | HAMMING | SYNTIA
+
+type infrule =  MinOffset | Offset | MinMul | Mul | Mask | MaskOTF | MinXor | Xor | UDivX86 | UModX86 
+                | MinUShiftRight | UShiftRight | MinShiftLeft | ShiftLeft | Rotate | Affine | Poly2
+
 module type DIST = sig
   val name : string
   val dist : Bitvector.t -> Bitvector.t -> float
@@ -28,7 +33,7 @@ end
 module type VECDIST = sig
   type t
   val name : string
-  val vecdist : Bitvector.t array -> Bitvector.t array -> float
+  val vecdist : t Tree.t -> Bitvector.t array -> Bitvector.t array -> float
   val is_zero : float -> bool
   val extract : t Tree.t -> Bitvector.t array -> Bitvector.t array -> t Tree.t
 end
@@ -54,7 +59,7 @@ val dist_vec : float array -> float
 val vectorizeDist : (float array -> float) -> (module DIST) -> (module Tree.TreeConstructor with type data = 'a) -> (module VECDIST with type t = 'a)
 (** Transform a bitvector distance into a (in,out) vector distance *)
 
-module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) : sig
+module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) (MU : Mutations.MUTATIONS): sig
   module NoGuide : VECDIST with type t = M.data
   (** Distance without guiding *)
 
@@ -98,6 +103,12 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) : s
   module MinMul : VECDIST with type t = M.data
   (** Guiding distance for multiplication searching the minimum scalar instead of the first one *)
 
+  module UDivX86 : VECDIST with type t = M.data
+  (** Guiding distance for unsigned x86 division *)
+
+  module UModX86 : VECDIST with type t = M.data
+  (** Guiding distance for unsigned x86 modulo *)
+
   module Rotate : VECDIST with type t = M.data
   (** Guiding distance for rotate *)
 
@@ -112,6 +123,7 @@ module GuideModCst (D : DIST) (O : Oracle.ORACLE) (M : Tree.TreeConstructor) : s
 
   module Poly2 : VECDIST with type t = M.data
   (** Guiding distance for 2nd degree polynomial *)
+
 end
 
 (** Combines multiple vectorial distance into a single one *)
@@ -121,4 +133,8 @@ module CombineVecDist (M : sig
   val dists : (module VECDIST with type t = t) list
 end) : VECDIST with type t = M.t
 
-val infrules_of_str : string -> (module DIST) -> (module Oracle.ORACLE) -> (module Tree.TreeConstructor with type data = 'a) -> (module VECDIST with type t = 'a) list
+val str_to_infrule : string -> infrule
+val create_infrules : infrule list -> (module DIST) -> (module Oracle.ORACLE) -> 
+  (module Tree.TreeConstructor with type data = 'a) -> (module Mutations.MUTATIONS) -> (module VECDIST with type t = 'a) list
+
+val kind_of_str : string -> kind

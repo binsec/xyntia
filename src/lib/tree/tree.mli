@@ -1,11 +1,11 @@
 (**************************************************************************)
 (*  This file is part of BINSEC.                                          *)
 (*                                                                        *)
-(*  Copyright (C) 2019-2025                                               *)
+(*  Copyright (C) 2019-2026                                               *)
 (*    CEA (Commissariat à l'énergie atomique et aux énergies              *)
 (*         alternatives)                                                  *)
 (*                                                                        *)
-(*  you can redistribute it and/or modify it under the terms of the GNU   *)
+(*  You can redistribute it and/or modify it under the terms of the GNU   *)
 (*  Lesser General Public License as published by the Free Software       *)
 (*  Foundation, version 2.1.                                              *)
 (*                                                                        *)
@@ -19,16 +19,19 @@
 (*                                                                        *)
 (**************************************************************************)
 
+type variable = { name : string ; sz : int }
+type constant = { name : string ; value : Bitvector.t }
+
 type op_t =
-  | OP_Var of Oracle.variable
-  | OP_Const of Oracle.constant
+  | OP_Var of variable
+  | OP_Const of constant
   | OP_Unop of Operators.unop_t
   | OP_Binop of Operators.binop_t
   | OP_Triop of Operators.triop_t
 
 type 'a node =
-  | Var of Oracle.variable
-  | Const of Oracle.constant
+  | Var of variable
+  | Const of constant
   | SizeMod of Operators.sizemod_t * 'a t
   | Unop of Operators.unop_t * 'a t
   | Binop of Operators.binop_t * 'a t * 'a t
@@ -36,35 +39,49 @@ type 'a node =
 
 and 'a t = {
   node : 'a node;
-  (* number of nodes in this subtree, size modifiers do not count *)
+  (* Number of nodes with size modifiers *)
   sz : int;
+  (* number of nodes in this subtree, size modifiers do not count *)
+  sz_no_mod : int;
   (* bitsize of the values calculated by this tree *)
   bitsz : int;
   data : 'a;
 }
+
+val eq_var : variable -> variable -> bool
+(** Checks the equality between variables *)
 
 val compare : 'a t -> 'a t -> int
 val tree_equal : 'a t -> 'a t -> bool
 (** Checks tree equality (with respect to the commutativity of operators) *)
 
 val to_string : ('a -> string) -> 'a t -> string
+val string_of : unit t -> string
+
+val var_of : string -> int -> variable
+val const_of_int : int -> int -> constant
+val const_of_bitv : Bitvector.t -> constant
 
 (* Constructors *)
-val mk_var : 'a -> Oracle.variable -> 'a t
-val mk_const : 'a -> Oracle.constant -> 'a t
+val mk_var : 'a -> variable -> 'a t
+val mk_const : 'a -> constant -> 'a t
 val mk_const_of_bv : 'a -> Bitvector.t -> 'a t
 val mk_sizemod : 'a -> Operators.sizemod_t -> 'a t -> 'a t
 val mk_unop : 'a -> Operators.unop_t -> 'a t -> 'a t
 val mk_binop : 'a -> Operators.binop_t -> 'a t -> 'a t -> 'a t
 val mk_triop : 'a -> Operators.triop_t -> 'a t -> 'a t -> 'a t -> 'a t
 
+(* Utils *)
+val get_vars : 'a t -> variable list
+val replace_var : 'a t -> variable -> 'a t -> 'a t
+
 module type TreeConstructor = sig
   type data
   type t' := data t
 
   (* Specialized Constructor *)
-  val mk_var : Oracle.variable -> t'
-  val mk_const : Oracle.constant -> t'
+  val mk_var : variable -> t'
+  val mk_const : constant -> t'
   val mk_const_of_bv : Bitvector.t -> t'
   val mk_sizemod : Operators.sizemod_t -> t' -> t'
   val mk_unop : Operators.unop_t -> t' -> t'
